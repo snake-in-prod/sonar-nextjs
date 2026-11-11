@@ -24,11 +24,11 @@ class PluginTest {
   @Test
   void catalog() {
     List<String> keys = RuleCatalog.ALL.stream().map(RuleCatalog.Spec::key).toList();
-    assertThat(keys).hasSize(15);
+    assertThat(keys).hasSize(16);
     assertThat(new HashSet<>(keys)).hasSameSizeAs(keys);
     assertThat(RuleCatalog.ALL).allSatisfy(s -> assertThat(s.factory().get()).isNotNull());
     assertThat(RuleCatalog.ALL.stream().filter(s -> !s.active()).map(RuleCatalog.Spec::key))
-      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes");
+      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes", "MiddlewareMatcherGap");
   }
 
   @Test
@@ -38,7 +38,7 @@ class PluginTest {
     assertThat(context.repositories()).extracting(RulesDefinition.Repository::key).containsExactlyInAnyOrder("nextjs-js", "nextjs-ts");
     RulesDefinition.Repository ts = context.repository("nextjs-ts");
     assertThat(ts.language()).isEqualTo("ts");
-    assertThat(ts.rules()).hasSize(15);
+    assertThat(ts.rules()).hasSize(16);
     RulesDefinition.Rule secret = ts.rule("SecretInPublicEnv");
     assertThat(secret.type()).isEqualTo(RuleType.VULNERABILITY);
     assertThat(secret.defaultImpacts()).containsEntry(SoftwareQuality.SECURITY, Severity.HIGH);

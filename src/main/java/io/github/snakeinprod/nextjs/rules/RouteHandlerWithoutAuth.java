@@ -72,7 +72,7 @@ public class RouteHandlerWithoutAuth implements NextRule {
   }
 
   /** A header, a cookie, a secret or token, or a signature check. */
-  private static boolean checksToken(JsTrees.Fn fn, List<Chain> chains) {
+  static boolean checksToken(JsTrees.Fn fn, List<Chain> chains) {
     for (Chain c : chains) {
       List<String> names = c.names();
       if (names.contains("headers") || names.contains("cookies") || ServerActionWithoutAuth.Flow.calls(c, n -> TOKEN_CALL.matcher(n).matches())
@@ -125,7 +125,7 @@ public class RouteHandlerWithoutAuth implements NextRule {
   }
 
   /** The middleware imports an auth library or checks the session. */
-  private static boolean checksCaller(Module mw) {
+  static boolean checksCaller(Module mw) {
     for (Import i : mw.imports()) {
       if (AUTH_SPEC.matcher(i.spec()).matches()) {
         return true;

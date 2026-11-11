@@ -1,0 +1,28 @@
+<p>A middleware (<code>middleware.ts</code>, or <code>proxy.ts</code> in Next.js 16) that checks the session runs only
+for the paths its <code>config.matcher</code> matches. Pages and route handlers under <code>dashboard</code>,
+<code>admin</code>, <code>settings</code> or <code>account</code> that the matcher leaves out, and that check nothing
+themselves, are open to anyone. The issue is reported on the matcher and lists the routes left out.</p>
+<p>A route checks itself with a session call (<code>auth()</code>, <code>getServerSession</code>,
+<code>currentUser</code>...), a cookie, header or token read, an auth hook (<code>useSession</code>...), a guard component
+or wrapper, a redirect, in the module or a module it imports; a page also through an enclosing layout (or the Pages
+Router <code>_app</code>) that checks the session and redirects or renders a guard. Public paths (sign-in, sign-up,
+auth, webhooks, callbacks, public, static) are left out, and so is a middleware whose matcher covers no
+protected-looking route (one meant only for the sign-in page). The matcher follows Next.js semantics:
+<code>:param</code>, <code>:param*</code>, <code>:param+</code>, <code>:param?</code>, <code>(regex)</code> groups and
+negative lookaheads such as <code>/((?!api|_next/static).*)</code>; an entry with <code>has</code> or
+<code>missing</code> counts as matching, and a matcher that is not a literal counts as matching everything.</p>
+<h2>Why is this an issue?</h2>
+<p>The matcher is a list of paths kept by hand. A section added later (<code>/settings</code> next to
+<code>/dashboard</code>) is not in it, and nothing else stops a visitor who is not signed in.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+// middleware.ts
+export { auth as middleware } from '@/auth';
+export const config = { matcher: ['/dashboard/:path*'] }; // Noncompliant: app/settings/page.tsx checks nothing
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+// middleware.ts
+export { auth as middleware } from '@/auth';
+export const config = { matcher: ['/dashboard/:path*', '/settings/:path*'] };
+</pre>

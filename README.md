@@ -35,6 +35,7 @@ extend "Next.js".
 | ServerActionWithoutAuth | Vulnerability | Critical | yes |
 | ServerActionWithoutValidation | Vulnerability | Major | yes |
 | RouteHandlerWithoutAuth | Vulnerability | Major | yes |
+| MiddlewareMatcherGap | Vulnerability | Major | no |
 | PersonalizedCachedFetch | Vulnerability | Critical | yes |
 | OpenRedirect | Vulnerability | Major | yes |
 | UnsafeHtmlFromInput | Vulnerability | Critical | yes |

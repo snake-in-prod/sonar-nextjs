@@ -17,15 +17,14 @@ import java.util.Set;
 /**
  * User-specific values in cached data. A value is user-specific when it comes from cookies() or headers() (next/headers),
  * or from the session: auth(), getServerSession(), currentUser(), or getSession() / getUser() / getCurrentUser()
- * without arguments; and through any variable computed from one, in the same function. Three forms:
+ * without arguments; and through any variable computed from one, in the same function. Two forms:
  * <ul>
- *   <li>a fetch with {@code cache: 'force-cache'} or {@code next: { revalidate }} (not 0) in an inline options object
- *   whose URL, headers or body use such a value;</li>
  *   <li>an unstable_cache callback that reads one, or uses one from the enclosing function that is neither an argument
  *   nor in the key parts;</li>
  *   <li>a "use cache" function (or file) that reads one.</li>
  * </ul>
- * Values passed through helpers defined elsewhere are not followed.
+ * Values passed through helpers defined elsewhere are not followed. A cached fetch is not reported: the Data Cache keys
+ * a fetch on its URL, headers and body, so a user-specific value there gives each user an entry of their own.
  */
 public class PersonalizedCachedFetch implements NextRule {
 
@@ -37,27 +36,19 @@ public class PersonalizedCachedFetch implements NextRule {
     Module m = ctx.module();
     Set<String> requestApis = ValueFlow.imported(m, "next/headers", Set.of("cookies", "headers"));
     Set<String> caches = ValueFlow.imported(m, "next/cache", Set.of("unstable_cache"));
-    if (caches.isEmpty() && ctx.file().tokens().stream().noneMatch(t -> t.isIdent("fetch"))) {
-      checkUseCache(ctx, m, requestApis);
+    checkUseCache(ctx, m, requestApis);
+    if (caches.isEmpty()) {
       return;
     }
-    ValueFlow.Source source =(expr, tainted) -> references(expr, tainted.keySet(), requestApis) ? List.of() : null;
+    ValueFlow.Source source = (expr, tainted) -> references(expr, tainted.keySet(), requestApis) ? List.of() : null;
     List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, source, Map.of()));
     for (Chain c : ctx.file().chains()) {
-      ValueFlow flow = ValueFlow.at(flows, c.first());
-      Set<String> tainted = flow == null ? Set.of() : flow.tainted.keySet();
       Chain.Call call = c.callAfter(0);
-      if (call == null) {
-        continue;
-      }
-      if (c.firstName().equals("fetch") && cachedAndPersonal(call, tainted, requestApis)) {
-        ctx.report(c.first(), "Do not cache this fetch: its URL, headers or body depend on the user's cookies, headers or session, "
-          + "so one user's response is stored for everyone. Use cache: 'no-store'.");
-      } else if (caches.contains(c.firstName()) && c.names().size() == 1) {
-        checkUnstableCache(ctx, m, c, call, tainted, requestApis);
+      if (call != null && caches.contains(c.firstName()) && c.names().size() == 1) {
+        ValueFlow flow = ValueFlow.at(flows, c.first());
+        checkUnstableCache(ctx, m, c, call, flow == null ? Set.of() : flow.tainted.keySet(), requestApis);
       }
     }
-    checkUseCache(ctx, m, requestApis);
   }
 
   private static void checkUseCache(RuleContext ctx, Module m, Set<String> requestApis) {
@@ -74,28 +65,6 @@ public class PersonalizedCachedFetch implements NextRule {
         }
       }
     }
-  }
-
-  private static boolean cachedAndPersonal(Chain.Call call, Set<String> tainted, Set<String> apis) {
-    List<List<Node>> args = call.items();
-    if (args.size() < 2 || args.get(1).size() != 1 || !(args.get(1).get(0) instanceof Node.Group options) || !options.is("{")) {
-      return false;
-    }
-    boolean cached = false;
-    boolean personal = references(args.get(0), tainted, apis);
-    for (List<Node> property : options.items()) {
-      if (Nodes.isIdent(property.get(0), "cache") && property.size() == 3) {
-        Token v = Nodes.leaf(property.get(2));
-        cached |= v != null && JsTrees.unquote(v.text()).equals("force-cache");
-      } else if (Nodes.isIdent(property.get(0), "next") && property.size() == 3 && property.get(2) instanceof Node.Group next) {
-        for (List<Node> p : next.items()) {
-          cached |= Nodes.isIdent(p.get(0), "revalidate") && p.size() > 2 && !(p.size() == 3 && Nodes.isLeaf(p.get(2), "0"));
-        }
-      } else {
-        personal |= references(property, tainted, apis);
-      }
-    }
-    return cached && personal;
   }
 
   private static void checkUnstableCache(RuleContext ctx, Module m, Chain c, Chain.Call call, Set<String> tainted, Set<String> apis) {

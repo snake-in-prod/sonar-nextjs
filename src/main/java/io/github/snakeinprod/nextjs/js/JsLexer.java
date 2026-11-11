@@ -45,7 +45,8 @@ public final class JsLexer {
   public static Lexed lex(String path, String language, String source) {
     String p = path.toLowerCase(Locale.ROOT);
     Jsx mode = p.endsWith(".jsx") || p.endsWith(".tsx") ? Jsx.FULL : "ts".equals(language) ? Jsx.NONE : Jsx.HEURISTIC;
-    JsLexer l = new JsLexer(source, mode);
+    // a byte order mark would hide the directive prologue ("use server" of an action file)
+    JsLexer l = new JsLexer(source.startsWith("﻿") ? source.substring(1) : source, mode);
     l.code(false);
     return new Lexed(List.copyOf(l.tokens), List.copyOf(l.comments));
   }

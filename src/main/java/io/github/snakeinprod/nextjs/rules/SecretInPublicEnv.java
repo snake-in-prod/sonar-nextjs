@@ -1,6 +1,7 @@
 package io.github.snakeinprod.nextjs.rules;
 
 import io.github.snakeinprod.nextjs.model.EnvRead;
+import io.github.snakeinprod.nextjs.model.Role;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -20,11 +21,17 @@ public class SecretInPublicEnv implements NextRule {
 
   @Override
   public void check(RuleContext ctx) {
+    boolean server = ctx.module().role() == Role.SERVER;
     for (EnvRead e : ctx.module().envReads()) {
-      if (isSecret(e.name())) {
-        ctx.report(e.token(), e.name() + " is inlined into the browser bundle: keep this secret in a variable without"
-          + " NEXT_PUBLIC_ and use it only on the server.");
+      if (!isSecret(e.name())) {
+        continue;
       }
+      // server code keeps the value out of the browser, but the name invites client code to read it
+      ctx.report(e.token(), server
+        ? e.name() + " is named for the browser, so any client code reading it ships it to every visitor: rename it without"
+          + " NEXT_PUBLIC_ to keep this secret on the server."
+        : e.name() + " is inlined into the browser bundle: keep this secret in a variable without NEXT_PUBLIC_ and use it"
+          + " only on the server.");
     }
   }
 

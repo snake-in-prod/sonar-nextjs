@@ -8,8 +8,8 @@ whatever that service, or whoever compromises it, returns. The script can read t
 their data away.</p>
 <p>The rule reports the value when it is the request or response value itself, a variable holding it, or a template
 literal or concatenation containing it. It stays silent when a sanitizer or escape function is applied to the value
-in the same function, and when the HTML comes from a helper, a prop, <code>JSON.stringify</code> or a renderer it
-cannot see into.</p>
+in the same function, and when the HTML comes from a helper, a prop, React state, <code>JSON.stringify</code> or a
+renderer it cannot see into.</p>
 <h2>How to fix it</h2>
 <p>Render the value as text (<code>{value}</code>), or sanitize the HTML right before rendering it.</p>
 <h3>Noncompliant code example</h3>

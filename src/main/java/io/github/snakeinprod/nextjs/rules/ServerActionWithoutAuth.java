@@ -1,6 +1,7 @@
 package io.github.snakeinprod.nextjs.rules;
 
 import io.github.snakeinprod.nextjs.js.JsTrees;
+import io.github.snakeinprod.nextjs.model.ActionBuilder;
 import io.github.snakeinprod.nextjs.model.Directive;
 import io.github.snakeinprod.nextjs.model.Import;
 import io.github.snakeinprod.nextjs.model.Module;
@@ -26,6 +27,7 @@ import java.util.regex.Pattern;
  * writes (a database write, a POST/PUT/PATCH/DELETE fetch without credentials, revalidatePath / revalidateTag) and never
  * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter
  * and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
+ * An action built with an action library is checked when its client middleware or procedure checks the session too.
  * {@link Flow} holds what the endpoint rules share.
  */
 public class ServerActionWithoutAuth implements NextRule {
@@ -54,7 +56,7 @@ public class ServerActionWithoutAuth implements NextRule {
       }
       List<Chain> chains = Flow.chains(a.fn());
       if (flow.writes(m, chains) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
-        && flow.session(m, a.fn()) == Flow.Check.NO) {
+        && flow.session(m, a.fn()) == Flow.Check.NO && (a.builder() == null || flow.builder(m, a.builder()) == Flow.Check.NO)) {
         ctx.report(a.name(), "Check the session in \"" + a.name().text() + "\" before it changes data: anyone can call a Server Action.");
       }
     }
@@ -187,7 +189,7 @@ public class ServerActionWithoutAuth implements NextRule {
           List<Node> kids = t.file().root().children();
           for (int i = 0; i < kids.size(); i++) {
             if (Nodes.leaf(kids.get(i)) == local) {
-              return mentions(initializer(kids, i + 1), dbNames(t)) != null;
+              return mentions(JsTrees.initializer(kids, i + 1), dbNames(t)) != null;
             }
           }
           return false;
@@ -352,25 +354,106 @@ public class ServerActionWithoutAuth implements NextRule {
 
     /** The function a module exports under a name, re-exports followed; null when it is not a visible function. */
     Found exported(Module t, String name, int depth) {
+      Export e = export(t, name, depth);
+      if (e == null) {
+        return null;
+      }
+      Module x = e.module();
+      JsTrees.Fn fn = x.functions().get(e.name().equals("default") && !x.functions().containsKey(e.local()) ? "default" : e.local());
+      return fn == null ? null : new Found(x, fn);
+    }
+
+    record Export(Module module, String name, String local) {
+    }
+
+    /** The module and local name a module exports under a name, re-exports followed; null when not found. */
+    private Export export(Module t, String name, int depth) {
       if (depth > 4) {
         return null;
       }
       Token local = t.exports().get(name);
       if (local != null) {
-        JsTrees.Fn fn = t.functions().get(name.equals("default") && !t.functions().containsKey(local.text()) ? "default" : local.text());
-        return fn == null ? null : new Found(t, fn);
+        return new Export(t, name, local.text());
       }
       for (Import i : t.imports()) {
         String imported = i.names().containsKey(name) ? i.names().get(name) : i.names().containsKey("*") ? name : null;
         Module next = model.target(i);
         if (i.reExport() && imported != null && next != null) {
-          Found f = exported(next, imported, depth + 1);
-          if (f != null) {
-            return f;
+          Export e = export(next, imported, depth + 1);
+          if (e != null) {
+            return e;
           }
         }
       }
       return null;
+    }
+
+    /**
+     * Whether an action library chain checks the session: a function given to one of its steps does
+     * ({@code .use(async ({ next }) => { await auth(); ... })}, a procedure's handler), or the client it starts from
+     * ({@code authActionClient.schema(s).action(...)}) or a middleware or procedure it is given by name
+     * ({@code .use(requireUser)}, {@code createServerActionProcedure(authed)}) does, followed through imports.
+     */
+    Check builder(Module m, ActionBuilder b) {
+      return builder(m, b, 0, new HashSet<>());
+    }
+
+    private Check builder(Module m, ActionBuilder b, int depth, Set<JsTrees.Fn> seen) {
+      if (depth > 6) {
+        return Check.UNKNOWN;
+      }
+      Check result = Check.NO;
+      List<String> names = new ArrayList<>();
+      if (b.client() != null) {
+        names.add(b.client().text());
+      }
+      for (int s = 0; s < b.steps().size(); s++) {
+        ActionBuilder.Step step = b.steps().get(s);
+        for (JsTrees.Fn f : step.functions()) {
+          result = either(result, session(m, f, depth + 1, seen));
+        }
+        if (step.name().is("use") || s == 0 && b.client() == null) {
+          for (List<Node> item : step.args().items()) {
+            Token t = item.size() == 1 ? Nodes.leaf(item.get(0)) : null;
+            if (t != null && t.kind() == TokenKind.IDENT) {
+              names.add(t.text());
+            }
+          }
+        }
+      }
+      for (String n : names) {
+        result = either(result, client(m, n, depth + 1, seen));
+      }
+      return result;
+    }
+
+    /** A client, procedure or middleware by its local name: a builder or a function of the module, or imported. */
+    private Check client(Module m, String name, int depth, Set<JsTrees.Fn> seen) {
+      ActionBuilder local = m.builder(name);
+      if (local != null) {
+        return builder(m, local, depth, seen);
+      }
+      JsTrees.Fn fn = m.functions().get(name);
+      if (fn != null) {
+        return session(m, fn, depth, seen);
+      }
+      for (Import i : m.imports()) {
+        String imported = i.names().get(name);
+        if (imported == null || i.typeOnly()) {
+          continue;
+        }
+        Module t = model.target(i);
+        if (t == null) {
+          return PATH_LIKE.matcher(i.spec()).matches() ? Check.UNKNOWN : Check.NO;
+        }
+        Export e = export(t, imported, 0);
+        return e == null ? Check.UNKNOWN : client(e.module(), e.local(), depth + 1, seen);
+      }
+      return Check.NO;
+    }
+
+    private static Check either(Check a, Check b) {
+      return a == Check.YES || b == Check.YES ? Check.YES : a == Check.UNKNOWN || b == Check.UNKNOWN ? Check.UNKNOWN : Check.NO;
     }
 
     // ------------------------------------------------------------ declarations
@@ -390,7 +473,7 @@ public class ServerActionWithoutAuth implements NextRule {
             j++;
           }
           if (!names.isEmpty() && j < k.size() && Nodes.isLeaf(k.get(j), "=")) {
-            out.add(new Decl(names, initializer(k, j + 1)));
+            out.add(new Decl(names, JsTrees.initializer(k, j + 1)));
           }
         }
       });
@@ -420,30 +503,6 @@ public class ServerActionWithoutAuth implements NextRule {
         }
       }
       return out;
-    }
-
-    /** The nodes of an expression from {@code from} to the end of its statement (";", ",", or a new line without an operator). */
-    static List<Node> initializer(List<Node> kids, int from) {
-      List<Node> init = new ArrayList<>();
-      for (int x = from; x < kids.size(); x++) {
-        Node n = kids.get(x);
-        if (Nodes.isLeaf(n, ";") || Nodes.isLeaf(n, ",")) {
-          break;
-        }
-        if (!init.isEmpty()) {
-          Node prev = init.get(init.size() - 1);
-          if (n.first().line() > prev.last().line() && !isOp(prev) && !isOp(n)) {
-            break;
-          }
-        }
-        init.add(n);
-      }
-      return init;
-    }
-
-    private static boolean isOp(Node n) {
-      Token t = Nodes.leaf(n);
-      return t != null && t.kind() == TokenKind.OP;
     }
 
     /** The first token using one of the names as a value (not a property after "." nor an object key), or null. */

@@ -23,6 +23,9 @@ public final class RoutesJson {
   public static String build(NextModel model, Map<String, List<Analyzer.Issue>> issues) {
     JsonArray out = new JsonArray();
     for (Module m : model.modules()) {
+      if (m.isTest()) {
+        continue;
+      }
       int count = issues.getOrDefault(m.path(), List.of()).size();
       if (m.route() != null && m.route().isRoute()) {
         out.add(entry(m.route().url(), m.route().isEndpoint() ? "route" : "page", m, m.route().dynamic(),

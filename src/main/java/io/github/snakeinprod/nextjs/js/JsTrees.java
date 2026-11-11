@@ -98,9 +98,9 @@ public final class JsTrees {
     if (first instanceof Node.Group p && p.is("(")) {
       arrow = i + 1;
       if (arrow < kids.size() && Nodes.isLeaf(kids.get(arrow), ":")) {
-        // TypeScript return type: (x): Promise<void> => ...
-        while (arrow < kids.size() && kids.get(arrow) instanceof Node.Leaf l && !l.token().is("=>") && !l.token().is(",")
-          && !l.token().is(";")) {
+        // TypeScript return type: (x): Promise<void> => ..., (x): Promise<Item[]> => ...
+        while (arrow < kids.size() && (kids.get(arrow) instanceof Node.Leaf l && !l.token().is("=>") && !l.token().is(",")
+          && !l.token().is(";") || kids.get(arrow) instanceof Node.Group a && a.is("["))) {
           arrow++;
         }
       }
@@ -187,6 +187,30 @@ public final class JsTrees {
     }
     Token t = Nodes.leaf(kids.get(k - 1));
     return t != null && t.kind() == TokenKind.IDENT ? t : null;
+  }
+
+  /** The nodes of an expression from {@code from} to the end of its statement (";", ",", or a new line without an operator). */
+  public static List<Node> initializer(List<Node> kids, int from) {
+    List<Node> init = new ArrayList<>();
+    for (int x = from; x < kids.size(); x++) {
+      Node n = kids.get(x);
+      if (Nodes.isLeaf(n, ";") || Nodes.isLeaf(n, ",")) {
+        break;
+      }
+      if (!init.isEmpty()) {
+        Node prev = init.get(init.size() - 1);
+        if (n.first().line() > prev.last().line() && !isOp(prev) && !isOp(n)) {
+          break;
+        }
+      }
+      init.add(n);
+    }
+    return init;
+  }
+
+  private static boolean isOp(Node n) {
+    Token t = Nodes.leaf(n);
+    return t != null && t.kind() == TokenKind.OP;
   }
 
   /** The text of a string token without its quotes ('a', "a", `a`). */

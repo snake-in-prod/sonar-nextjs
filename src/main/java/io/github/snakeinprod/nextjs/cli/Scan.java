@@ -76,7 +76,7 @@ public final class Scan {
         totals.merge(e.getKey().getKey(), e.getValue(), Integer::sum);
       }
       if (flags.contains("--modules")) {
-        System.out.println("-- " + m.path() + " " + m.role() + (m.reachedFromServer() ? " server-reached" : "")
+        System.out.println("-- " + m.path() + " " + (m.isTest() ? "TEST" : m.role()) + (m.reachedFromServer() ? " server-reached" : "")
           + (m.directives().isEmpty() ? "" : " " + m.directives()) + (m.route() == null ? "" : " " + m.route()));
       }
     }

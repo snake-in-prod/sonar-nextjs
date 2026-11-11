@@ -45,8 +45,11 @@ public final class Analyzer {
     return model;
   }
 
-  /** The issues of one module, sorted by position. Throws only on an internal error of a rule; callers skip the module. */
+  /** The issues of one module, sorted by position; none in a test file. Throws only on an internal error of a rule; callers skip the module. */
   public List<Issue> analyze(Module module) {
+    if (module.isTest()) {
+      return List.of();
+    }
     Set<Integer> nosonar = new HashSet<>();
     for (Token c : module.file().comments()) {
       if (c.text().contains("NOSONAR")) {

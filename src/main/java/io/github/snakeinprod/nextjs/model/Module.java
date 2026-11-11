@@ -26,6 +26,7 @@ public final class Module {
   boolean appDir;
   Role role = Role.SHARED;
   boolean reachedFromServer;
+  boolean test;
 
   Module(ParsedFile file, Set<Directive> directives, List<Import> imports, Map<String, Token> exports,
     Map<String, JsTrees.Fn> functions, Map<String, List<JsTrees.Fn>> functionDirectives, List<ServerAction> serverActions,
@@ -122,6 +123,16 @@ public final class Module {
 
   public List<ServerAction> serverActions() {
     return serverActions;
+  }
+
+  /** The action library chain a top-level {@code const name = ...} of this module holds, or null. */
+  public ActionBuilder builder(String name) {
+    return ActionBuilder.declared(file.root(), name);
+  }
+
+  /** A test, mock, story or end-to-end file: no role, no route, not measured, no issues. */
+  public boolean isTest() {
+    return test;
   }
 
   public List<EnvRead> envReads() {

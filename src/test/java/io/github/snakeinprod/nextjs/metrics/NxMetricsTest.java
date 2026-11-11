@@ -40,6 +40,18 @@ class NxMetricsTest {
   }
 
   @Test
+  void app_json_holds_the_whole_app_totals() {
+    JsonObject app = JsonParser.parseString(NxMetrics.appJson(Map.of("nx_routes", 7, "nx_client_modules", 2, "nx_server_modules", 14,
+      "nx_shared_modules", 3, "nx_unprotected_endpoints", 3))).getAsJsonObject();
+    assertThat(app.get("nx_routes").getAsInt()).isEqualTo(7);
+    assertThat(app.get("nx_server_actions").getAsInt()).isZero();
+    assertThat(app.get("nx_unprotected_endpoints").getAsInt()).isEqualTo(3);
+    assertThat(app.get("nx_client_ratio").getAsDouble()).isEqualTo(10.5);
+    assertThat(app.keySet()).hasSize(NxMetrics.SUMMED.size() + 1);
+    assertThat(JsonParser.parseString(NxMetrics.appJson(Map.of())).getAsJsonObject().has("nx_client_ratio")).isFalse();
+  }
+
+  @Test
   void unprotected_endpoints_count_the_auth_rules() {
     Module m = model.module("src/actions/save.ts");
     List<Analyzer.Issue> issues = List.of(new Analyzer.Issue(m.path(), "ServerActionWithoutAuth", 5, 0, 5, 1, "x"),

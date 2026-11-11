@@ -18,7 +18,7 @@ window.registerExtension('nextjs/nextjs', function (options) {
   var AUTH_RULES = ['ServerActionWithoutAuth', 'RouteHandlerWithoutAuth'];
   var NO_DATA = 'Analyse the project with this plugin installed; it needs a package.json declaring next';
   var MEASURES = ['nx_routes', 'nx_client_modules', 'nx_server_modules', 'nx_shared_modules', 'nx_client_ratio',
-    'nx_server_actions', 'nx_unprotected_endpoints', 'nx_dynamic_routes', 'nx_routes_json'];
+    'nx_server_actions', 'nx_unprotected_endpoints', 'nx_dynamic_routes', 'nx_routes_json', 'nx_app_json'];
   var NAMES = {nx_routes: 'Routes', nx_client_ratio: 'Client ratio', nx_unprotected_endpoints: 'Unprotected endpoints',
     nx_dynamic_routes: 'Dynamic routes', nx_client_modules: 'Client modules', nx_server_modules: 'Server modules',
     nx_shared_modules: 'Shared modules', nx_server_actions: 'Server Actions'};
@@ -300,11 +300,13 @@ window.registerExtension('nextjs/nextjs', function (options) {
   var tiles = h('ul', {class: 'nx-tiles', 'aria-label': 'Headline measures'});
   var side = h('div', {class: 'nx-side'});
   var main = h('div', {class: 'nx-main'});
-  // SonarQube keeps only the changed files of a pull request: the measures add up those, nx_routes_json is the whole app
+  // SonarQube keeps only the changed files of a pull request: the measures add up those; nx_routes_json and the
+  // totals in nx_app_json (analyses since that measure) are the whole app
   var whole = scope.pullRequest === undefined;
+  var note = h('p', {class: 'nx-muted', style: 'margin:0 0 12px 0'}, ['Pull request: the numbers and the client/server split count the ' +
+    'files it changes; the routes and Server Actions panels show the whole app.']);
   if (!whole) {
-    root.appendChild(h('p', {class: 'nx-muted', style: 'margin:0 0 12px 0'}, ['Pull request: the numbers and the client/server split count the files it ' +
-      'changes; the routes and Server Actions panels show the whole app.']));
+    root.appendChild(note);
   }
   root.appendChild(tiles);
   root.appendChild(main);
@@ -362,7 +364,7 @@ window.registerExtension('nextjs/nextjs', function (options) {
     (data.component.measures || []).forEach(function (m) {
       var v = m.value !== undefined ? m.value : (m.period || (m.periods || [])[0] || {}).value;
       if (v !== undefined && v !== '') {
-        values[m.metric] = m.metric === 'nx_routes_json' ? v : Number(v);
+        values[m.metric] = /_json$/.test(m.metric) ? v : Number(v);
       }
     });
     var all = [];
@@ -370,6 +372,25 @@ window.registerExtension('nextjs/nextjs', function (options) {
       all = JSON.parse(values.nx_routes_json || '[]');
     } catch (e) {
       all = [];
+    }
+    // whole-app totals: on a pull request the summed measures cover only its changed files
+    var app = null;
+    try {
+      app = values.nx_app_json ? JSON.parse(values.nx_app_json) : null;
+    } catch (e) {
+      app = null;
+    }
+    if (app) {
+      Object.keys(NAMES).forEach(function (k) {
+        if (typeof app[k] === 'number') {
+          values[k] = app[k];
+        }
+      });
+      if (!whole) {
+        whole = true;
+        note.replaceChildren('Pull request: the numbers and panels show the whole app; issues by rule and the quality gate ' +
+          'count the files it changes.');
+      }
     }
     var routes = all.filter(function (r) { return r.kind !== 'action'; });
     var actions = all.filter(function (r) { return r.kind === 'action'; });

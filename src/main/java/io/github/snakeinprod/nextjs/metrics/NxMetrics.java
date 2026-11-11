@@ -1,5 +1,6 @@
 package io.github.snakeinprod.nextjs.metrics;
 
+import com.google.gson.JsonObject;
 import io.github.snakeinprod.nextjs.model.Module;
 import io.github.snakeinprod.nextjs.model.Role;
 import io.github.snakeinprod.nextjs.sensor.Analyzer;
@@ -12,7 +13,7 @@ import org.sonar.api.measures.Metrics;
 
 /**
  * The nx_* measures. Integer ones are saved on files and summed to directories and the project by
- * {@link NxAggregator}, which also derives nx_client_ratio. nx_routes_json is saved on the project only.
+ * {@link NxAggregator}, which also derives nx_client_ratio. nx_routes_json and nx_app_json are saved on the project only.
  */
 public class NxMetrics implements Metrics {
 
@@ -41,6 +42,9 @@ public class NxMetrics implements Metrics {
   public static final Metric<String> ROUTES_JSON = new Metric.Builder("nx_routes_json", "Routes (JSON)", Metric.ValueType.DATA)
     .setDescription("JSON: every route and Server Action with its kind, runtime, client modules and issues").setDomain(DOMAIN)
     .setQualitative(false).setHidden(true).create();
+  public static final Metric<String> APP_JSON = new Metric.Builder("nx_app_json", "Whole app (JSON)", Metric.ValueType.DATA)
+    .setDescription("JSON: the project measures counted on every file, for a pull request where the others count its changed files")
+    .setDomain(DOMAIN).setQualitative(false).setHidden(true).create();
 
   /** Integer measures saved on files and summed up. */
   public static final List<Metric<Integer>> SUMMED = List.of(ROUTES, CLIENT_MODULES, SERVER_MODULES, SHARED_MODULES, SERVER_ACTIONS,
@@ -57,6 +61,10 @@ public class NxMetrics implements Metrics {
   /** The file measures of a module; {@code issues} are all the module's issues, every rule included. */
   public static Map<Metric<Integer>, Integer> fileValues(Module m, List<Analyzer.Issue> issues) {
     Map<Metric<Integer>, Integer> out = new LinkedHashMap<>();
+    if (m.isTest()) {
+      SUMMED.forEach(k -> out.put(k, 0));
+      return out;
+    }
     boolean route = m.route() != null && m.route().isRoute();
     out.put(ROUTES, route ? 1 : 0);
     out.put(CLIENT_MODULES, m.role() == Role.CLIENT ? 1 : 0);
@@ -68,10 +76,22 @@ public class NxMetrics implements Metrics {
     return out;
   }
 
+  /** nx_app_json: the file values summed over every file ({@code totals} by metric key) and nx_client_ratio. */
+  public static String appJson(Map<String, Integer> totals) {
+    JsonObject o = new JsonObject();
+    SUMMED.forEach(k -> o.addProperty(k.getKey(), totals.getOrDefault(k.getKey(), 0)));
+    int client = totals.getOrDefault(CLIENT_MODULES.getKey(), 0);
+    int all = client + totals.getOrDefault(SERVER_MODULES.getKey(), 0) + totals.getOrDefault(SHARED_MODULES.getKey(), 0);
+    if (all > 0) {
+      o.addProperty(CLIENT_RATIO.getKey(), NxAggregator.ratio(client, all));
+    }
+    return o.toString();
+  }
+
   @Override
   @SuppressWarnings("rawtypes")
   public List<Metric> getMetrics() {
     return List.of(ROUTES, CLIENT_MODULES, SERVER_MODULES, SHARED_MODULES, CLIENT_RATIO, SERVER_ACTIONS, UNPROTECTED_ENDPOINTS,
-      DYNAMIC_ROUTES, ROUTES_JSON);
+      DYNAMIC_ROUTES, ROUTES_JSON, APP_JSON);
   }
 }

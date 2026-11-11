@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
  * Server Action inputs should be validated before use. A Server Action passing one of its arguments (FormData
  * included), or a value built from one, to a database call or as the whole target of redirect(). Silent when the action
  * calls anything that looks like a validation (parse, safeParse, validate, assert, check...) or tests an input in a
- * condition, a comparison, typeof or an allow-list.
+ * condition, a comparison, typeof or an allow-list. An action built with an action library is validated by a
+ * {@code .schema}, {@code .inputSchema} or {@code .input} step of its chain.
  */
 public class ServerActionWithoutValidation implements NextRule {
 
@@ -26,6 +27,9 @@ public class ServerActionWithoutValidation implements NextRule {
   private static final Set<String> COMPARE = Set.of("===", "!==", "==", "!=", "<", ">", "<=", ">=", "?", "instanceof");
   private static final Set<String> CONDITIONS = Set.of("if", "while", "switch");
   private static final Set<String> ALLOW_LIST = Set.of("includes", "has", "test", "match", "startsWith", "endsWith", "some", "find");
+
+  private static final Set<String> BUILDER_RAW = Set.of("clientInput", "bindArgsClientInputs");
+  private static final Set<String> BUILDER_PARSED = Set.of("parsedInput", "input");
 
   private ServerActionWithoutAuth.Flow flow;
 
@@ -37,11 +41,11 @@ public class ServerActionWithoutValidation implements NextRule {
     }
     flow = ServerActionWithoutAuth.Flow.of(flow, ctx.model());
     for (ServerAction a : m.serverActions()) {
-      check(ctx, m, a.fn());
+      check(ctx, m, a.fn(), a.builder() == null ? params(a.fn()) : builderInputs(a));
     }
   }
 
-  private void check(RuleContext ctx, Module m, JsTrees.Fn fn) {
+  private static Set<String> params(JsTrees.Fn fn) {
     Set<String> inputs = new HashSet<>();
     for (Token t : fn.simpleParams()) {
       inputs.add(t.text());
@@ -53,6 +57,38 @@ public class ServerActionWithoutValidation implements NextRule {
         }
       }
     }
+    return inputs;
+  }
+
+  /**
+   * The raw inputs an action library handler destructures: {@code clientInput}, {@code bindArgsClientInputs}, and
+   * {@code parsedInput} / {@code input} when the chain has no schema step; {@code ctx} and the rest come from the server.
+   */
+  private static Set<String> builderInputs(ServerAction a) {
+    Set<String> raw = new HashSet<>(BUILDER_RAW);
+    if (!a.builder().validated()) {
+      raw.addAll(BUILDER_PARSED);
+    }
+    Set<String> inputs = new HashSet<>();
+    List<List<Node>> params = a.fn().params() == null ? List.of() : a.fn().params().items();
+    if (params.isEmpty() || !(params.get(0).get(0) instanceof Node.Group g && g.is("{"))) {
+      return inputs;
+    }
+    for (List<Node> item : g.items()) {
+      Token key = Nodes.leaf(item.get(0));
+      if (key == null || !raw.contains(key.text())) {
+        continue;
+      }
+      if (item.size() >= 3 && Nodes.isLeaf(item.get(1), ":")) {
+        inputs.addAll(ServerActionWithoutAuth.Flow.patternNames(item.get(2)));
+      } else {
+        inputs.add(key.text());
+      }
+    }
+    return inputs;
+  }
+
+  private void check(RuleContext ctx, Module m, JsTrees.Fn fn, Set<String> inputs) {
     List<Chain> chains = ServerActionWithoutAuth.Flow.chains(fn);
     if (inputs.isEmpty() || chains.stream().anyMatch(c -> ServerActionWithoutAuth.Flow.calls(c, n -> !n.startsWith("revalidate")
       && VALIDATOR.matcher(n).matches()))) {

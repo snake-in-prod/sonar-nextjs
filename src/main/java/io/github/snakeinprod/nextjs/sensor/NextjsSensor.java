@@ -74,6 +74,7 @@ public class NextjsSensor implements Sensor {
     model.skipped().forEach(s -> LOG.warn("Next.js: skipped {}", s));
     Analyzer analyzer = Analyzer.all(model);
     Map<String, List<Analyzer.Issue>> saved = new HashMap<>();
+    Map<String, Integer> totals = new HashMap<>();
     int failed = 0;
     for (Module m : model.modules()) {
       InputFile f = byPath.get(m.path());
@@ -91,10 +92,13 @@ public class NextjsSensor implements Sensor {
       saved.put(m.path(), save(context, f, issues));
       for (Map.Entry<Metric<Integer>, Integer> e : NxMetrics.fileValues(m, issues).entrySet()) {
         context.<Integer>newMeasure().on(f).forMetric(e.getKey()).withValue(e.getValue()).save();
+        totals.merge(e.getKey().getKey(), e.getValue(), Integer::sum);
       }
     }
     context.<String>newMeasure().on(context.project()).forMetric(NxMetrics.ROUTES_JSON).withValue(RoutesJson.build(model, saved))
       .save();
+    // a pull request keeps the measures of its changed files only: the whole app's numbers for the page
+    context.<String>newMeasure().on(context.project()).forMetric(NxMetrics.APP_JSON).withValue(NxMetrics.appJson(totals)).save();
     LOG.info("Next.js: {} modules analysed, {} failed", model.modules().size(), failed);
   }
 

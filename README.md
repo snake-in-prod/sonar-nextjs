@@ -48,9 +48,10 @@ extend "Next.js".
 ## Measures
 
 nx_routes, nx_client_modules, nx_server_modules, nx_shared_modules, nx_client_ratio, nx_server_actions,
-nx_unprotected_endpoints, nx_dynamic_routes, and nx_routes_json for the project page "Next.js": the route tree with a
-dot per route coloured by its issues and the client modules each pulls in, the client/server split, issues by rule
-and the Server Actions.
+nx_unprotected_endpoints, nx_dynamic_routes, and nx_routes_json and nx_app_json for the project page "Next.js": the
+route tree with a dot per route coloured by its issues and the client modules each pulls in, the client/server split,
+issues by rule and the Server Actions. Server Actions built with next-safe-action or zsa count; test, mock, story and
+end-to-end files are left out. On a pull request the page shows the whole app's numbers (nx_app_json).
 
 ![The Next.js project page](docs/images/nextjs-page.png)
 

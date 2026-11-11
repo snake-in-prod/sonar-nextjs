@@ -75,7 +75,12 @@ final class ModuleReader {
           : e.getValue().text());
         if (f != null) {
           Token name = JsTrees.nameOf(f);
-          actions.add(new ServerAction(name != null ? name : e.getValue(), f, false));
+          actions.add(new ServerAction(name != null ? name : e.getValue(), f, false, null));
+        } else {
+          ActionBuilder b = ActionBuilder.declared(root, e.getValue().text());
+          if (b != null && b.handler() != null) {
+            actions.add(new ServerAction(e.getValue(), b.handler(), false, b));
+          }
         }
       }
     }
@@ -84,7 +89,7 @@ final class ModuleReader {
         continue;
       }
       Token name = JsTrees.nameOf(f);
-      actions.add(new ServerAction(name != null ? name : f.container().children().get(f.start()).first(), f, true));
+      actions.add(new ServerAction(name != null ? name : f.container().children().get(f.start()).first(), f, true, null));
     }
     actions.sort((a, b) -> compare(a.name(), b.name()));
     List<EnvRead> env = new ArrayList<>();

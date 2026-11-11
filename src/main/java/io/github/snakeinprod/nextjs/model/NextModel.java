@@ -33,6 +33,8 @@ public final class NextModel {
   private static final Pattern MAJOR = Pattern.compile("(\\d+)\\.");
   private static final Set<String> APP_CONVENTIONS = Set.of("page", "layout", "route", "loading", "error", "global-error",
     "not-found", "template", "default");
+  /** Tests, mocks, stories and end-to-end files: no role, no route, not measured, no issues. */
+  private static final Pattern TEST = Pattern.compile("(^|/)(__tests__|__mocks__|e2e|playwright)/|\\.(test|spec|stories)\\.[^/]*$");
   private static final Pattern CONVENTION_FILE = Pattern.compile("([^/.]+)\\.(js|jsx|ts|tsx)");
 
   private final Map<String, Module> modules;
@@ -67,7 +69,9 @@ public final class NextModel {
           skipped.add(p);
           continue;
         }
-        modules.put(p, ModuleReader.read(parse(p, source), resolver));
+        Module m = ModuleReader.read(parse(p, source), resolver);
+        m.test = TEST.matcher(p).find();
+        modules.put(p, m);
       } catch (RuntimeException e) {
         skipped.add(p + ": " + e);
       }
@@ -228,8 +232,8 @@ public final class NextModel {
     importers.replaceAll((k, v) -> Set.copyOf(v));
     // client: "use client" modules and what they import; a "use server" module imported there is a reference, not code
     for (Module m : modules.values()) {
-      if (m.has(Directive.USE_CLIENT)) {
-        for (Module c : reachable(m, t -> !t.has(Directive.USE_SERVER))) {
+      if (m.has(Directive.USE_CLIENT) && !m.test) {
+        for (Module c : reachable(m, t -> !t.has(Directive.USE_SERVER) && !t.test)) {
           c.role = Role.CLIENT;
         }
       }
@@ -239,8 +243,8 @@ public final class NextModel {
       boolean entry = m.has(Directive.USE_SERVER) || m.route() != null && m.route().router().equals("app")
         || m.route() != null && (m.route().kind().equals("api") || m.route().kind().equals("middleware"))
         || m.inAppDir() && m.role() != Role.CLIENT;
-      if (entry && !m.has(Directive.USE_CLIENT) && !m.reachedFromServer) {
-        for (Module s : reachable(m, t -> !t.has(Directive.USE_CLIENT) && !t.reachedFromServer)) {
+      if (entry && !m.test && !m.has(Directive.USE_CLIENT) && !m.reachedFromServer) {
+        for (Module s : reachable(m, t -> !t.has(Directive.USE_CLIENT) && !t.reachedFromServer && !t.test)) {
           s.reachedFromServer = true;
         }
       }
@@ -254,7 +258,7 @@ public final class NextModel {
 
   private void route(Module m) {
     NextApp app = appOf(m.path());
-    if (app == null) {
+    if (app == null || m.test) {
       return;
     }
     String rest = m.path().substring(app.dir().length());

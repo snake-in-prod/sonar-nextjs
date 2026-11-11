@@ -77,6 +77,9 @@ class PluginTest {
         "'issues/search'", "'qualitygates/project_status'", "'nextjs-js'", "'nextjs-ts'", "aria-label");
       // a pull request holds only its changed files: the page says so and drops the whole-app route counts from the tiles
       assertThat(js).contains("var whole = scope.pullRequest === undefined", "sub: whole && routes.length", "(whole ? ' · '");
+      // ... unless the analysis saved the whole app's totals: the tiles and the split prefer them, and the note says so
+      assertThat(js).contains("'nx_app_json'", "JSON.parse(values.nx_app_json)", "values[k] = app[k]", "whole = true",
+        "issues by rule and the quality gate");
       assertThat(js.chars().filter(c -> c == '{').count()).isEqualTo(js.chars().filter(c -> c == '}').count());
       assertThat(js.chars().filter(c -> c == '(').count()).isEqualTo(js.chars().filter(c -> c == ')').count());
     }

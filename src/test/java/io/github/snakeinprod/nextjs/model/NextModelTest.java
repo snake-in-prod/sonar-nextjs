@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.snakeinprod.nextjs.TestProjects;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -103,6 +104,74 @@ class NextModelTest {
     assertThat(inline.functionsWithDirective("use server")).hasSize(1);
     assertThat(inline.exports()).containsOnlyKeys("runtime", "default");
     assertThat(m.module("src/components/Counter.tsx").serverActions()).isEmpty();
+  }
+
+  @Test
+  void action_library_chains_are_server_actions() {
+    NextModel m = NextModel.build(TestProjects.of(Map.of(
+      "package.json", "{\"dependencies\":{\"next\":\"15.0.0\"}}",
+      "lib/safe-action.ts", "export const client = createSafeActionClient().use(async ({ next }) => next());",
+      "app/actions.ts", String.join("\n",
+        "'use server';",
+        "import { client } from '@/lib/safe-action';",
+        "export const save = client",
+        "  .metadata({ name: 'save' })",
+        "  .bindArgsSchemas<[id: z.ZodString]>([z.string()])",
+        "  .inputSchema(schema)",
+        "  .action(async ({ parsedInput, ctx }): Promise<Item[]> => []);",
+        "export const run = createServerAction().handler(async () => 1);",
+        "export const plain = client.action(async () => 1);",
+        "export const config = { a: 1 };",
+        "export const schema = z.object({ a: z.string() });"))));
+    Module actions = m.module("app/actions.ts");
+    assertThat(actions.serverActions()).extracting(a -> a.name().text()).containsExactly("save", "run", "plain");
+    ServerAction save = actions.serverActions().get(0);
+    assertThat(save.builder().client().text()).isEqualTo("client");
+    assertThat(save.builder().steps()).extracting(s -> s.name().text())
+      .containsExactly("metadata", "bindArgsSchemas", "inputSchema", "action");
+    assertThat(save.builder().validated()).isTrue();
+    assertThat(save.fn().async()).isTrue();
+    ServerAction run = actions.serverActions().get(1);
+    assertThat(run.builder().client()).isNull();
+    assertThat(run.builder().validated()).isFalse();
+    assertThat(actions.serverActions().get(2).builder().validated()).isFalse();
+    // the client in another module, for the rules to follow
+    ActionBuilder client = m.module("lib/safe-action.ts").builder("client");
+    assertThat(client.steps()).extracting(s -> s.name().text()).containsExactly("createSafeActionClient", "use");
+    assertThat(client.steps().get(1).functions()).hasSize(1);
+    assertThat(m.module("lib/safe-action.ts").serverActions()).isEmpty();
+  }
+
+  @Test
+  void test_files_get_no_role_no_route_and_no_issues() {
+    String page = "export default function P() { return null; }";
+    Map<String, String> files = new java.util.HashMap<>(Map.of(
+      "package.json", "{\"dependencies\":{\"next\":\"15.0.0\"}}",
+      "app/page.tsx", page,
+      "app/__tests__/page.tsx", "'use client';\nimport P from '../page';\nexport default P;",
+      "app/page.test.tsx", "import P from './page';",
+      "pages/__mocks__/user.ts", "export const u = 1;",
+      "components/Button.stories.tsx", "'use client';\nimport { helper } from '../lib/helper';",
+      "lib/helper.ts", "export const helper = 1;",
+      "lib/db.spec.ts", "'use server';\nexport async function act(x) { await db.post.delete({ where: { id: x } }); }",
+      "e2e/home.ts", "import P from '../app/page';",
+      "tests/playwright/login.ts", "export const a = 1;"));
+    NextModel m = NextModel.build(TestProjects.of(files));
+    for (String p : List.of("app/__tests__/page.tsx", "app/page.test.tsx", "pages/__mocks__/user.ts", "components/Button.stories.tsx",
+      "lib/db.spec.ts", "e2e/home.ts", "tests/playwright/login.ts")) {
+      Module t = m.module(p);
+      assertThat(t.isTest()).as(p).isTrue();
+      assertThat(t.role()).as(p).isEqualTo(Role.SHARED);
+      assertThat(t.reachedFromServer()).as(p).isFalse();
+      assertThat(t.route()).as(p).isNull();
+      assertThat(io.github.snakeinprod.nextjs.metrics.NxMetrics.fileValues(t, List.of()).values()).as(p).containsOnly(0);
+      assertThat(io.github.snakeinprod.nextjs.sensor.Analyzer.all(m).analyze(t)).as(p).isEmpty();
+    }
+    // a story importing a module does not make it client code; the page keeps its role
+    assertThat(m.module("lib/helper.ts").role()).isEqualTo(Role.SHARED);
+    assertThat(m.module("lib/helper.ts").isTest()).isFalse();
+    assertThat(m.module("app/page.tsx").role()).isEqualTo(Role.SERVER);
+    assertThat(m.module("app/page.tsx").route()).isNotNull();
   }
 
   @Test

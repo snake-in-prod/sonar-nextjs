@@ -14,7 +14,7 @@ js/ts files + package.json / tsconfig.json / jsconfig.json  (model.Project: path
      Server Actions, env reads); imports resolved by Resolver; then routes, reverse edges and roles (NextModel.link)
   -> sensor.Analyzer: every rule on every module -> issues
   -> NxMetrics.fileValues -> nx_* on files -> NxAggregator sums to directories and the project, derives nx_client_ratio
-  -> RoutesJson -> nx_routes_json on the project
+  -> RoutesJson -> nx_routes_json on the project; NxMetrics.appJson -> nx_app_json (whole-app totals) on the project
 ```
 
 `NextjsSensor` (SonarQube), `cli.Scan` (command line) and the tests (`RuleVerifier`) all go through `NextModel.build`
@@ -49,7 +49,9 @@ The lexer never throws; a broken file still gives a tree.
 | `exports()` | exported name to the token of the local name (`export function f`, `export const f`, `export { a as b }`, `export default ...` as "default") |
 | `functions()` | top-level named functions (`function f`, `const f = () =>`), an anonymous default export as "default" |
 | `functionsWithDirective("use server")` | functions, nested ones too, whose body starts with that directive ("use cache" too) |
-| `serverActions()` | exported functions of a "use server" module, and inline "use server" functions (`inline()`) |
+| `serverActions()` | exported functions of a "use server" module, exported action library values (`builder()`, see below), and inline "use server" functions (`inline()`) |
+| `builder(name)` | the action library chain a top-level `const name = ...` holds, or null |
+| `isTest()` | a test, mock, story or end-to-end file, see Test files |
 | `envReads()` | `process.env.X` and `process.env["X"]`: the name and its token |
 | `route()` | the Next.js convention, or null |
 | `inAppDir()` | under app/ or src/app/ of a Next.js package |
@@ -93,6 +95,24 @@ and interception markers `(.)` removed, private folders `_x` left out, `dynamic`
   middleware, "use server" modules.
 - SHARED: neither. Pages Router pages are not entries: their getServerSideProps imports are removed from the browser
   bundle, which an import graph cannot tell apart, so they and what only they import are shared.
+
+### Action libraries
+
+`export const x = actionClient.schema(s).action(async ({ parsedInput, ctx }) => ...)` (next-safe-action, also
+`.inputSchema`, `.metadata`, `.use`, `.stateAction`) and `createServerAction().input(s).handler(...)` or
+`procedure.createServerAction()...` (zsa) in a "use server" module are Server Actions: `ActionBuilder` holds the chain,
+`client()` the name it starts from (null when it starts with a call), `steps()` the calls (type arguments allowed),
+`validated()` a `.schema`, `.inputSchema` or `.input` step; the action's `fn()` is the function given to the last
+`action`, `stateAction` or `handler` step. ServerActionWithoutAuth follows the client through the module graph
+(`lib/safe-action.ts`): a `.use(...)` middleware or a procedure handler that checks the session, given inline or by
+name, makes every action built on it authenticated. ServerActionWithoutValidation treats only `clientInput`,
+`bindArgsClientInputs`, and `parsedInput` / `input` without a schema step, as raw input.
+
+### Test files
+
+`*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `e2e/` or `playwright/` are read
+(`isTest()`) but get no route and no role (SHARED, never entered from a client or server module), count in no nx_*
+measure nor in nx_routes_json, and `Analyzer` reports nothing in them.
 
 A module can be client and reached from the server at once (a file without a directive imported by both a client and
 a server module): `role()` is CLIENT, `reachedFromServer()` is true. Rules about server components ask
@@ -156,13 +176,16 @@ On files: nx_routes, nx_client_modules, nx_server_modules, nx_shared_modules, nx
 nx_unprotected_endpoints, nx_dynamic_routes (routes with a dynamic segment). `NxAggregator` sums them and derives
 nx_client_ratio (client modules / all modules, %). nx_routes_json, on the project: one object per route and per
 Server Action with `path` (URL path, or file#function), `kind` (page, route, action), `file`, `runtime`, `dynamic`,
-`clientModules`, `issues`.
+`clientModules`, `issues`. nx_app_json, on the project: the file measures summed over every file and
+nx_client_ratio, by metric key. On a pull request SonarQube keeps only the changed files, so the summed nx_* cover
+those; nx_routes_json and nx_app_json still describe the whole app.
 
 ## Page
 
 `static/nextjs.js`, registered as `nextjs/nextjs`. SonarQube mounts extension pages in a two-column grid: the page sets
 `options.el.style.gridColumn = '1 / -1'` and `width = '100%'`, and uses no CSS container queries. Plain DOM, charts as
-inline SVG built with `createElementNS`, no innerHTML with data.
+inline SVG built with `createElementNS`, no innerHTML with data. The tiles and the client/server split prefer the
+totals of nx_app_json; on a pull request a note says what counts the whole app and what its changed files.
 
 ## Conventions
 

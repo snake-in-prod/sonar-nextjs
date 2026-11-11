@@ -28,7 +28,7 @@ class PluginTest {
     assertThat(new HashSet<>(keys)).hasSameSizeAs(keys);
     assertThat(RuleCatalog.ALL).allSatisfy(s -> assertThat(s.factory().get()).isNotNull());
     assertThat(RuleCatalog.ALL.stream().filter(s -> !s.active()).map(RuleCatalog.Spec::key))
-      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes");
+      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes", "MiddlewareMatcherGap");
   }
 
   @Test

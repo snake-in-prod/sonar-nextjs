@@ -1,0 +1,51 @@
+package io.github.snakeinprod.nextjs.rules;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.github.snakeinprod.nextjs.RuleVerifier;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/** A session-checking middleware whose matcher leaves protected-looking routes out. */
+class MiddlewareMatcherGapTest {
+
+  @Test
+  void routes_left_out_of_the_matcher() {
+    RuleVerifier.verify("MiddlewareMatcherGap");
+  }
+
+  @Test
+  void catch_all_matcher_and_routes_checking_themselves() {
+    RuleVerifier.verify("MiddlewareMatcherGapCovered", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void matcher_meant_for_the_sign_in_page_only() {
+    RuleVerifier.verify("MiddlewareMatcherGapNoGuard", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void next_matcher_semantics() {
+    assertThat(covers("/dashboard/:path*", "/dashboard")).isTrue();
+    assertThat(covers("/dashboard/:path*", "/dashboard/a/b")).isTrue();
+    assertThat(covers("/dashboard/:path*", "/dashboards")).isFalse();
+    assertThat(covers("/admin/:id+", "/admin")).isFalse();
+    assertThat(covers("/admin/:id+", "/admin/1/2")).isTrue();
+    assertThat(covers("/blog/:slug?", "/blog")).isTrue();
+    assertThat(covers("/blog/:slug", "/blog/a/b")).isFalse();
+    assertThat(covers("/(api|trpc)(.*)", "/api/admin/x")).isTrue();
+    assertThat(covers("/(api|trpc)(.*)", "/settings")).isFalse();
+    assertThat(covers("/((?!api|_next/static|favicon.ico).*)", "/settings")).isTrue();
+    assertThat(covers("/((?!api|_next/static|favicon.ico).*)", "/api/admin")).isFalse();
+    assertThat(covers("/:locale(en|de)/settings", "/[locale]/settings")).isTrue();
+    assertThat(covers("/:locale(en|de)/settings", "/[locale]/account")).isFalse();
+    assertThat(covers("/Settings", "/settings")).isTrue();
+    assertThat(covers("/", "/settings")).isFalse();
+    assertThat(MiddlewareMatcherGap.compile(List.of("/a/{b}?"))).isNull();
+    assertThat(MiddlewareMatcherGap.compile(List.of("dashboard"))).isNull();
+  }
+
+  private static boolean covers(String source, String url) {
+    return MiddlewareMatcherGap.covered(MiddlewareMatcherGap.compile(List.of(source)), url, List.of("en", "de"));
+  }
+}

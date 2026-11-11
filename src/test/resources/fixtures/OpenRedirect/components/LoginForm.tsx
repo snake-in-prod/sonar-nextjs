@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 export function LoginForm() {
@@ -38,4 +39,29 @@ export function SafeLoginForm() {
   }
 
   return done;
+}
+
+export function StateLoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [target, setTarget] = useState('/');
+  const [home, setHome] = useState('/');
+  useEffect(() => {
+    setTarget(searchParams.get('next') ?? '/');
+    setHome('/home');
+  }, [searchParams]);
+  return () => {
+    router.push(target); // Noncompliant
+    // compliant: only fixed paths are set
+    router.push(home);
+  };
+}
+
+export function HintedLoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams.get('callbackUrl') || '/';
+  const onDone = () => router.push(callbackUrl); // Noncompliant
+  // the comparison after the redirect only picks a hint, it guards nothing
+  return { onDone, hint: callbackUrl !== '/' && callbackUrl };
 }

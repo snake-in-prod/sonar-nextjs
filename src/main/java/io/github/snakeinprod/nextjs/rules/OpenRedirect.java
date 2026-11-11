@@ -16,10 +16,10 @@ import java.util.regex.Pattern;
  * redirect(), permanentRedirect() (next/navigation), NextResponse.redirect() (next/server), Response.redirect(),
  * push() and replace() of a router from useRouter() (next/navigation, next/router: an absolute URL leaves the app),
  * {@code window.location.href = ...} and {@code window.location.assign()} / {@code replace()} whose target is a value
- * from searchParams, params or form data as it is (see {@link ValueFlow.Direct}), with no check of that value elsewhere
- * in the function: compared, tested with a method ({@code startsWith}, {@code match}), or passed to a function whose
- * name says it checks ({@code isSafeUrl}, {@code allowed.includes}). A value built by an unknown helper is not
- * followed.
+ * from searchParams, params or form data as it is (see {@link ValueFlow.Direct}), also held in React state
+ * ({@code setNext(searchParams.get('next'))}), with no check of that value before the redirect in the function:
+ * compared, tested with a method ({@code startsWith}, {@code match}), or passed to a function whose name says it checks
+ * ({@code isSafeUrl}, {@code allowed.includes}). A value built by an unknown helper is not followed.
  */
 public class OpenRedirect implements NextRule {
 
@@ -74,11 +74,11 @@ public class OpenRedirect implements NextRule {
       return;
     }
     ValueFlow.Direct direct = new ValueFlow.Direct(false, m.route() != null);
-    List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, direct, ValueFlow.Direct.formDataParams(f)));
+    List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, direct, ValueFlow.Direct.formDataParams(f), true));
     for (List<Node> target : targets) {
       ValueFlow flow = ValueFlow.at(flows, target.get(0).first());
       List<List<String>> keys = flow == null ? null : direct.keys(target, flow.tainted, flow.locals);
-      if (keys != null && !flow.checked(keys, ranges, true, true, s -> CHECK.matcher(s).matches())) {
+      if (keys != null && !flow.checked(keys, ranges, true, true, s -> CHECK.matcher(s).matches(), target.get(0).first())) {
         ctx.report(target.get(0).first(), target.get(target.size() - 1).last(),
           "Check this redirect target from the request against an allow-list or the same origin: it can send users to any site.");
       }

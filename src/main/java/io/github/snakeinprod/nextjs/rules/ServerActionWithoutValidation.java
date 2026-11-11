@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
  * included), or a value built from one, to a database call or as the whole target of redirect(). Silent when the action
  * calls anything that looks like a validation (parse, safeParse, validate, assert, check...) or tests an input in a
  * condition, a comparison, typeof or an allow-list. An action built with an action library is validated by a
- * {@code .schema}, {@code .inputSchema} or {@code .input} step of its chain.
+ * {@code .schema}, {@code .inputSchema} or {@code .input} step of its chain. Rows read from the database are not inputs, an
+ * array method on them is not a database call, nor are the sign-in calls of an auth library built with a database adapter.
  */
 public class ServerActionWithoutValidation implements NextRule {
 
@@ -27,6 +28,14 @@ public class ServerActionWithoutValidation implements NextRule {
   private static final Set<String> COMPARE = Set.of("===", "!==", "==", "!=", "<", ">", "<=", ">=", "?", "instanceof");
   private static final Set<String> CONDITIONS = Set.of("if", "while", "switch");
   private static final Set<String> ALLOW_LIST = Set.of("includes", "has", "test", "match", "startsWith", "endsWith", "some", "find");
+
+  /** Array methods: {@code rows.filter(...)} on query results runs in memory. */
+  private static final Set<String> ARRAY_METHODS = Set.of("map", "filter", "forEach", "flatMap", "reduce", "some", "every",
+    "includes", "indexOf", "slice", "concat", "join", "push", "sort");
+  /** next-auth's {@code const { signIn, unstable_update } = NextAuth({ adapter: PrismaAdapter(db) })}: not database calls. */
+  private static final Set<String> AUTH_CALLS = Set.of("signIn", "signOut", "unstable_update");
+  /** {@code const [id] = hashids.decode(input.id)}: numbers or nothing. */
+  private static final Pattern ID_DECODER = Pattern.compile("(?i).*(hashids|sqids).*");
 
   private static final Set<String> BUILDER_RAW = Set.of("clientInput", "bindArgsClientInputs");
   private static final Set<String> BUILDER_PARSED = Set.of("parsedInput", "input");
@@ -95,19 +104,25 @@ public class ServerActionWithoutValidation implements NextRule {
       return;
     }
     List<ServerActionWithoutAuth.Flow.Decl> decls = ServerActionWithoutAuth.Flow.decls(fn.body());
+    Set<String> rows = new HashSet<>();
     for (int pass = 0; pass < 4; pass++) {
       for (ServerActionWithoutAuth.Flow.Decl d : decls) {
         if (!inputs.containsAll(d.names()) && !coerced(d.init()) && ServerActionWithoutAuth.Flow.mentions(d.init(), inputs) != null) {
           inputs.addAll(d.names());
+          if (fromDb(m, d.init())) {
+            rows.addAll(d.names());
+          }
         }
       }
     }
     if (checked(fn.body(), inputs) || chains.stream().anyMatch(c -> allowListed(c, inputs))) {
       return;
     }
+    // a check on rows read with an input silences the action, but the rows themselves are not reported
+    inputs.removeAll(rows);
     Set<Token> reported = new HashSet<>();
     for (Chain c : chains) {
-      if (flow.isDbCall(m, c)) {
+      if (flow.isDbCall(m, c) && !inMemory(c) && !AUTH_CALLS.contains(c.firstName())) {
         List<Node> kids = c.container().children();
         Token t = firstInput(kids.subList(c.from() + 1, c.to() < kids.size() && isTemplate(kids.get(c.to())) ? c.to() + 1 : c.to()), inputs);
         if (t != null && reported.add(t)) {
@@ -123,15 +138,35 @@ public class ServerActionWithoutValidation implements NextRule {
     }
   }
 
+  /** {@code await db.post.findMany(...)}, {@code rows.filter(...)}: a value read from the database, not from the client. */
+  private boolean fromDb(Module m, List<Node> init) {
+    int i = !init.isEmpty() && Nodes.isIdent(init.get(0), "await") ? 1 : 0;
+    Token t = i < init.size() ? Nodes.leaf(init.get(i)) : null;
+    return t != null && t.kind() == TokenKind.IDENT && flow.dbNames(m).contains(t.text());
+  }
+
+  /** The first call of the chain is an array method: {@code rows.map(...)}, {@code cart.items.filter(...)}. */
+  private static boolean inMemory(Chain c) {
+    List<Chain.Segment> s = c.segments();
+    for (int i = 1; i + 1 < s.size(); i++) {
+      if (s.get(i + 1) instanceof Chain.Call) {
+        return s.get(i) instanceof Chain.Name n && ARRAY_METHODS.contains(n.token().text());
+      }
+    }
+    return false;
+  }
+
   private static boolean isTemplate(Node n) {
     Token t = Nodes.leaf(n);
     return t != null && t.kind() == TokenKind.STRING && t.text().startsWith("`");
   }
 
-  /** {@code Number(x)}, {@code parseInt(x)}: a coerced value, not the raw input. */
+  /** {@code Number(x)}, {@code parseInt(x)}, {@code hashids.decode(x)}: a coerced value, not the raw input. */
   private static boolean coerced(List<Node> init) {
     int i = !init.isEmpty() && Nodes.isIdent(init.get(0), "await") ? 1 : 0;
-    return i < init.size() && Nodes.leaf(init.get(i)) != null && COERCE.contains(Nodes.leaf(init.get(i)).text());
+    Token t = i < init.size() ? Nodes.leaf(init.get(i)) : null;
+    return t != null && (COERCE.contains(t.text()) || ID_DECODER.matcher(t.text()).matches() && i + 2 < init.size()
+      && Nodes.isLeaf(init.get(i + 1), ".") && Nodes.isIdent(init.get(i + 2), "decode"));
   }
 
   /** An input in an if / while / switch condition, a comparison, a ternary test or after typeof. */

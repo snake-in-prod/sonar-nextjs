@@ -1,0 +1,46 @@
+<p>A client component calls <code>useSearchParams()</code> from <code>next/navigation</code>, and an App Router page
+or layout renders it with no Suspense boundary in between, while that page (or a page under that layout) is
+statically rendered.</p>
+<h2>Why is this an issue?</h2>
+<p>A static page is rendered at build time, when there are no search parameters. Next.js then renders the client
+component tree up to the closest Suspense boundary in the browser only. Without a boundary that is the whole page:
+the server HTML is empty and the build fails with "useSearchParams() should be wrapped in a suspense boundary".</p>
+<p>The rule follows JSX from the page or layout to the component. It stays silent when any module on the way mentions
+Suspense, when a <code>loading</code> file wraps the page or the layout, when the component is loaded with
+<code>next/dynamic</code>, and when the page is dynamic: a dynamic segment without <code>generateStaticParams</code>,
+<code>cookies()</code>, <code>headers()</code>, a session helper, <code>searchParams</code>,
+<code>dynamic = 'force-dynamic'</code>, <code>no-store</code> or <code>revalidate = 0</code> in the page, its
+layouts or the server modules they import.</p>
+<h2>How to fix it</h2>
+<p>Wrap the component that reads the search parameters in <code>&lt;Suspense&gt;</code> with a fallback, as close to
+it as possible, so the rest of the page is still rendered on the server. Or read <code>searchParams</code> in the page
+and pass the values down.</p>
+<h3>Noncompliant code example</h3>
+<pre>
+// components/Filters.tsx
+'use client';
+import { useSearchParams } from 'next/navigation';
+
+export function Filters() {
+  const color = useSearchParams().get('color'); // Noncompliant
+  return &lt;p&gt;{color}&lt;/p&gt;;
+}
+
+// app/products/page.tsx
+export default function Products() {
+  return &lt;Filters /&gt;;
+}
+</pre>
+<h3>Compliant solution</h3>
+<pre>
+// app/products/page.tsx
+import { Suspense } from 'react';
+
+export default function Products() {
+  return (
+    &lt;Suspense fallback={&lt;p&gt;Loading filters&lt;/p&gt;}&gt;
+      &lt;Filters /&gt;
+    &lt;/Suspense&gt;
+  );
+}
+</pre>

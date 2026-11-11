@@ -1,0 +1,31 @@
+<p>An App Router page or layout exports both the <code>metadata</code> object and the <code>generateMetadata</code>
+function, declared in the file or re-exported from another module.</p>
+<h2>Why is this an issue?</h2>
+<p>Next.js takes the metadata of a route segment from one of the two, never both. A page or layout that exports both is
+refused: the build fails with "You are attempting to export "metadata" and "generateMetadata" from the same file".</p>
+<p>The rule looks at <code>page</code> and <code>layout</code> files of the App Router only. Names brought by
+<code>export * from</code> are not visible, so such files are left alone.</p>
+<h2>How to fix it</h2>
+<p>Keep the static <code>metadata</code> object when the values are fixed, or <code>generateMetadata</code> when they
+depend on params or fetched data. A shared default can stay as a local constant that <code>generateMetadata</code>
+spreads.</p>
+<h3>Noncompliant code example</h3>
+<pre>
+// app/blog/[slug]/page.tsx
+export const metadata = { title: 'Blog' };
+
+export async function generateMetadata({ params }) { // Noncompliant
+  const { slug } = await params;
+  return { title: slug };
+}
+</pre>
+<h3>Compliant solution</h3>
+<pre>
+// app/blog/[slug]/page.tsx
+const defaults = { title: 'Blog' };
+
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  return { ...defaults, title: slug };
+}
+</pre>

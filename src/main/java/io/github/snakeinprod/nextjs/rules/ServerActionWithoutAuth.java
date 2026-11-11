@@ -85,7 +85,7 @@ public class ServerActionWithoutAuth implements NextRule {
       "updateManyAndReturn", "upsert", "delete", "deleteMany", "insert", "insertInto", "insertOne", "insertMany", "updateTable",
       "deleteFrom", "updateOne", "replaceOne", "deleteOne", "findOneAndUpdate", "findOneAndDelete", "findOneAndReplace",
       "findByIdAndUpdate", "findByIdAndDelete", "findByIdAndRemove", "bulkWrite", "bulkCreate", "destroy", "$executeRaw",
-      "$executeRawUnsafe", "transaction", "$transaction", "increment", "decrement");
+      "$executeRawUnsafe", "transaction", "$transaction", "increment", "decrement", "save");
     private static final Set<String> SQL_CALLS = Set.of("query", "execute", "$queryRaw", "$queryRawUnsafe", "unsafe", "run", "exec");
     private static final Pattern WRITE_SQL = Pattern.compile("(?is)^[`'\"]\\s*(insert|update|delete|replace|upsert|merge|truncate"
       + "|drop|alter)\\b.*");
@@ -316,14 +316,16 @@ public class ServerActionWithoutAuth implements NextRule {
       }
       Check result = Check.NO;
       for (Chain c : chains) {
-        if (c.segments().size() < 2 || !(c.segments().get(1) instanceof Chain.Call) || dbNames(m).contains(c.firstName())) {
+        if (c.segments().size() < 2 || !(c.segments().get(1) instanceof Chain.Call)) {
           continue;
         }
         Check r = helper(m, c.firstName(), fn, depth, seen);
         if (r == Check.YES) {
           return r;
         }
-        if (r == Check.UNKNOWN) {
+        // a function using a database client (const getSession = async () => ... db ...) counts as one, so it is
+        // followed when visible; an unseen database helper is no session check
+        if (r == Check.UNKNOWN && !dbNames(m).contains(c.firstName())) {
           result = r;
         }
       }
@@ -375,7 +377,7 @@ public class ServerActionWithoutAuth implements NextRule {
 
     // ------------------------------------------------------------ declarations
 
-    /** {@code const|let|var <pattern> = <initializer>} anywhere in the tree. */
+    /** {@code const|let|var <pattern> = <initializer>}, or {@code let <name>: <type>} without one, anywhere in the tree. */
     static List<Decl> decls(Node.Group root) {
       List<Decl> out = new ArrayList<>();
       Nodes.groups(root, g -> {
@@ -391,6 +393,9 @@ public class ServerActionWithoutAuth implements NextRule {
           }
           if (!names.isEmpty() && j < k.size() && Nodes.isLeaf(k.get(j), "=")) {
             out.add(new Decl(names, initializer(k, j + 1)));
+          } else if (!names.isEmpty() && Nodes.isLeaf(k.get(i + 2), ":")) {
+            // let prisma: PrismaClient; assigned later: the type tells
+            out.add(new Decl(names, k.subList(i + 3, j)));
           }
         }
       });

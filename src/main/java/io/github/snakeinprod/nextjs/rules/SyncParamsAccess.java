@@ -25,8 +25,8 @@ import java.util.regex.Pattern;
  * (second argument), when the app's package.json declares next 15 or later. A read is {@code params.x},
  * {@code params[x]}, {@code const { x } = params}, {@code { params: { x } }} in the signature, {@code props.params.x},
  * or {@code ${params.x}} in a template literal. Awaiting, {@code use(params)}, {@code params.then}, and passing the
- * value on are fine. A name redeclared in the body or a parameter of a nested function shadowing it is not followed.
- * One issue per name and function, on the first read.
+ * value on are fine, and so is code testing {@code params instanceof Promise}. A name redeclared in the body or a
+ * parameter of a nested function shadowing it is not followed. One issue per name and function, on the first read.
  */
 public class SyncParamsAccess implements NextRule {
 
@@ -84,6 +84,18 @@ public class SyncParamsAccess implements NextRule {
     }
     Node.Group body = fn.body();
     List<Token> tokens = Nodes.tokens(body);
+    // params instanceof Promise: the code handles both shapes
+    Set<String> guarded = new HashSet<>();
+    for (int i = 0; i + 1 < tokens.size(); i++) {
+      if (tokens.get(i + 1).isIdent("instanceof")) {
+        String g = tokens.get(i).text();
+        if (roots.containsKey(g)) {
+          guarded.add(roots.get(g));
+        } else if (NAMES.contains(g)) {
+          guarded.add(g);
+        }
+      }
+    }
     roots.keySet().removeIf(n -> redeclared(tokens, n));
     if (holder != null && redeclared(tokens, holder)) {
       holder = null;
@@ -134,7 +146,7 @@ public class SyncParamsAccess implements NextRule {
       }
     }
     reads.sort(Comparator.comparingInt((Read x) -> x.at().line()).thenComparingInt(x -> x.at().column()));
-    Set<String> done = new HashSet<>();
+    Set<String> done = new HashSet<>(guarded);
     for (Read x : reads) {
       if (done.add(x.name())) {
         ctx.report(x.at(), "Await \"" + x.name() + "\" or unwrap it with React.use before reading it: it is a promise since Next.js 15.");

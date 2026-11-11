@@ -3,19 +3,21 @@ package io.github.snakeinprod.nextjs.rules;
 import io.github.snakeinprod.nextjs.model.Directive;
 import io.github.snakeinprod.nextjs.model.Import;
 import io.github.snakeinprod.nextjs.model.Module;
+import io.github.snakeinprod.nextjs.model.NextModel;
 import io.github.snakeinprod.nextjs.model.Role;
 import io.github.snakeinprod.nextjs.parse.Chain;
 import io.github.snakeinprod.nextjs.parse.Nodes;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
 /**
  * Server components should not call client hooks: a call of a client-only hook imported from react, react-dom or
  * next/navigation in an app/ module rendered on the server (no "use client", not reached from a client module). Only
- * modules Next.js really puts in the server graph: App Router convention files and modules an app/ server module
- * imports (an app/ file nobody imports, or only tests and stories, may be used from elsewhere). One issue per
- * module, on the first call: the fix is one "use client" line.
+ * modules Next.js really puts in the server graph: App Router convention files and the modules they reach through
+ * server modules (an app/ file imported by nobody, or only by tests, stories or such orphans, may be used from
+ * elsewhere). One issue per module, on the first call: the fix is one "use client" line.
  */
 public class ClientHookInServerComponent implements NextRule {
 
@@ -27,6 +29,9 @@ public class ClientHookInServerComponent implements NextRule {
     "react-dom", Set.of("useFormStatus", "useFormState"),
     "next/navigation", Set.of("useRouter", "usePathname", "useSearchParams", "useParams", "useSelectedLayoutSegment",
       "useSelectedLayoutSegments", "useServerInsertedHTML"));
+
+  private NextModel serverGraphModel;
+  private Set<Module> serverGraph;
 
   @Override
   public void check(RuleContext ctx) {
@@ -73,11 +78,18 @@ public class ClientHookInServerComponent implements NextRule {
     return c.callAfter(index) != null || c.names().size() == index + 1 && !c.endsWithCall() && Nodes.isLeaf(c.after(), "<");
   }
 
-  private static boolean inServerGraph(RuleContext ctx, Module m) {
-    if (m.route() != null && m.route().router().equals("app")) {
-      return true;
+  /** Modules reached from an App Router convention file through server modules (tests and stories left out). */
+  private boolean inServerGraph(RuleContext ctx, Module m) {
+    if (serverGraph == null || serverGraphModel != ctx.model()) {
+      serverGraphModel = ctx.model();
+      serverGraph = new HashSet<>();
+      for (Module r : ctx.model().modules()) {
+        if (r.route() != null && r.route().router().equals("app") && r.role() == Role.SERVER) {
+          serverGraph.addAll(ctx.model().reachable(r, x -> x.role() == Role.SERVER
+            && !x.path().matches(".*(\\.(test|spec|stories)\\.[^/]+|__tests__/.*)")));
+        }
+      }
     }
-    return ctx.model().importers(m).stream().anyMatch(i -> i.role() == Role.SERVER && i.inAppDir()
-      && !i.path().matches(".*(\\.(test|spec|stories)\\.[^/]+|__tests__/.*)"));
+    return serverGraph.contains(m);
   }
 }

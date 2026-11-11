@@ -1,16 +1,20 @@
-<p>A <code>redirect()</code>, <code>permanentRedirect()</code> (next/navigation) or <code>NextResponse.redirect()</code>
-(next/server) whose target is taken from <code>searchParams</code>, <code>params</code> or form data, with no allow-list
-or same-origin check.</p>
+<p>A <code>redirect()</code>, <code>permanentRedirect()</code> (next/navigation), <code>NextResponse.redirect()</code>
+(next/server) or <code>Response.redirect()</code>, a <code>router.push()</code> or <code>router.replace()</code> of
+<code>useRouter()</code> (next/navigation, next/router) or of the next/router <code>Router</code>, or a
+<code>window.location.href</code> assignment or <code>window.location.assign()</code> / <code>replace()</code> whose
+target is taken from <code>searchParams</code>, <code>params</code>, form data or the Pages Router <code>query</code>
+(<code>router.query</code>, <code>req.query</code>), with no allow-list or same-origin check.</p>
 <h2>Why is this an issue?</h2>
 <p>An open redirect lets an attacker build a link on your trusted domain that sends the visitor to a site of their
 choice: <code>https://your.app/login?next=https://evil.example</code>. It is used for phishing, and to steal tokens
 when the redirect follows a sign-in. <code>redirect()</code> and <code>NextResponse.redirect()</code> accept absolute
-URLs, and <code>new URL(value, request.url)</code> keeps the host of an absolute or protocol-relative value.</p>
-<p>The rule reports the target when it is the request value itself (a variable holding it, with a fallback such as
-<code>?? '/'</code>, a cast, <code>String()</code>, <code>new URL()</code>, or a template literal starting with it).
+URLs, <code>router.push()</code> navigates to an absolute URL with a full page load, and
+<code>new URL(value, request.url)</code> keeps the host of an absolute or protocol-relative value.</p>
+<p>The rule reports the target when it is the request value itself (a variable or React state holding it, with a
+fallback such as <code>?? '/'</code>, a cast, <code>String()</code>, <code>new URL()</code>, or a template literal starting with it).
 It stays silent when the value is compared, tested (<code>startsWith</code>, <code>match</code>), passed to a check
-(<code>isSafeUrl</code>, <code>allowed.includes</code>) or transformed by a helper elsewhere in the function, and when
-a fixed path or origin comes first.</p>
+(<code>isSafeUrl</code>, <code>allowed.includes</code>) before the redirect in the function, or transformed by a
+helper, and when a fixed path or origin comes first.</p>
 <h2>How to fix it</h2>
 <p>Accept only local paths (starting with one <code>/</code>, not <code>//</code> or <code>/\</code>), or compare the
 origin of the parsed URL with your own, or map the value to an allow-list.</p>
@@ -26,6 +30,16 @@ export default async function Login({ searchParams }) {
 export async function GET(request) {
   const to = request.nextUrl.searchParams.get('to') ?? '/';
   return NextResponse.redirect(new URL(to, request.url)); // Noncompliant
+}
+
+'use client';
+export function LoginForm() {
+  const router = useRouter();
+  const callbackUrl = useSearchParams().get('callbackUrl') ?? '/';
+  async function onSubmit() {
+    await signIn();
+    router.push(callbackUrl); // Noncompliant
+  }
 }
 </pre>
 <h3>Compliant solution</h3>

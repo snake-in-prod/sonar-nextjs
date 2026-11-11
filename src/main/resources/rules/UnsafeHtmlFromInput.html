@@ -1,6 +1,6 @@
 <p><code>dangerouslySetInnerHTML</code> rendering a value from <code>params</code>, <code>searchParams</code>
-(<code>useSearchParams()</code> too), form data or a <code>fetch</code> response without a sanitizer such as DOMPurify,
-sanitize-html or xss.</p>
+(<code>useSearchParams()</code> too), form data, the Pages Router <code>query</code> or a <code>fetch</code> response
+without a sanitizer such as DOMPurify, sanitize-html or xss.</p>
 <h2>Why is this an issue?</h2>
 <p>React escapes text, but <code>dangerouslySetInnerHTML</code> inserts the string as HTML. A value from the URL lets
 anyone craft a link that runs script in your origin (reflected cross-site scripting); HTML from another service runs

@@ -25,8 +25,9 @@ import java.util.function.Predicate;
  * nested functions included) for OpenRedirect, UnsafeHtmlFromInput and PersonalizedCachedFetch. A name is tainted
  * when every declaration or assignment of it in the scope has a tainted initializer and no function of the scope has a
  * parameter of that name ({@code items.map((c) => c.html)} beside {@code const c = searchParams.get('c')}); names are
- * not scoped further. Each tainted name keeps its keys: the token texts of the expressions it came from
- * ("searchParams . get ( 'next' )"), so that a check on any of them can be found.
+ * not scoped further. On request, a React state is assigned by each call of its setter. Each tainted name keeps its
+ * keys: the token texts of the expressions it came from ("searchParams . get ( 'next' )"), so that a check on any of
+ * them can be found.
  */
 final class ValueFlow {
 
@@ -47,9 +48,14 @@ final class ValueFlow {
   final Set<String> locals = new HashSet<>();
 
   ValueFlow(JsTrees.Fn fn, Source source, Map<String, List<List<String>>> seeds) {
+    this(fn, source, seeds, false);
+  }
+
+  /** {@code state}: follow React state through its setter calls. */
+  ValueFlow(JsTrees.Fn fn, Source source, Map<String, List<List<String>>> seeds, boolean state) {
     this.scope = new Node.Group(null, null, fn.container().children().subList(fn.start(), fn.end()));
     this.tokens = Nodes.tokens(scope);
-    List<Decl> decls = declarations(scope);
+    List<Decl> decls = state ? state(scope, declarations(scope)) : declarations(scope);
     decls.stream().filter(Decl::plain).forEach(d -> locals.add(d.names().get(0).text()));
     this.tainted = taint(decls, source, seeds, parameters(scope), locals);
   }
@@ -141,6 +147,51 @@ final class ValueFlow {
   }
 
   // ---------------------------------------------------------------- declarations
+
+  /**
+   * React state: {@code const [html, setHtml] = useState(...)} becomes one declaration of html per setter call
+   * ({@code setHtml(data.html)} as {@code html = data.html}), so that html is tainted when every value set is. The
+   * initial value and constants set ({@code setHtml('')} on an error) are left out, and a state never set otherwise is
+   * no declaration.
+   */
+  private static List<Decl> state(Node.Group scope, List<Decl> decls) {
+    List<Decl> out = new ArrayList<>();
+    Map<String, Token> setters = new HashMap<>();
+    for (Decl d : decls) {
+      List<Node> init = Direct.trim(d.init());
+      boolean useState = d.names().size() == 2 && !d.plain() && !init.isEmpty() && init.get(init.size() - 1) instanceof Node.Group g
+        && g.is("(") && (Nodes.isIdent(init.get(0), "useState") || init.size() > 2 && Nodes.isIdent(init.get(2), "useState"));
+      if (useState) {
+        setters.put(d.names().get(1).text(), d.names().get(0));
+      } else {
+        out.add(d);
+      }
+    }
+    if (setters.isEmpty()) {
+      return decls;
+    }
+    for (Chain c : Chains.in(scope)) {
+      Token value = setters.get(c.firstName());
+      Chain.Call call = c.names().size() == 1 ? c.callAfter(0) : null;
+      if (value != null && call != null && call.items().size() == 1 && !constant(call.items().get(0))) {
+        out.add(new Decl(List.of(value), call.items().get(0), true));
+      }
+    }
+    return out;
+  }
+
+  /** A literal: a string without interpolation, a number, null, undefined, a boolean, an empty array or object. */
+  private static boolean constant(List<Node> e) {
+    if (e.size() != 1) {
+      return false;
+    }
+    Token t = Nodes.leaf(e.get(0));
+    if (t == null) {
+      return ((Node.Group) e.get(0)).children().isEmpty() && !((Node.Group) e.get(0)).is("(");
+    }
+    return t.kind() == TokenKind.NUMBER || t.kind() == TokenKind.STRING && interpolations(t).parts().isEmpty()
+      || Set.of("null", "undefined", "true", "false").contains(t.text());
+  }
 
   /** {@code plain}: the target is one name, not a pattern. */
   record Decl(List<Token> names, List<Node> init, boolean plain) {
@@ -357,8 +408,15 @@ final class ValueFlow {
    * One of the keys is used outside every sink (the calls or objects that use such values) in a check: compared ({@code ===}, {@code in}), the receiver of a method
    * that is not a plain getter ({@code next.startsWith('/')}) when {@code methods}, the receiver of a method or inside
    * the arguments of a call whose name passes {@code callee} ({@code isSafe(next)}, {@code DOMPurify.sanitize(html)}).
+   * With {@code until}, only checks before that token count: one after the sink ({@code next === '/x' && <Hint />} in the
+   * returned JSX) cannot guard it.
    */
   boolean checked(List<List<String>> keys, List<Node.Group> sinks, boolean compare, boolean methods, Predicate<String> callee) {
+    return checked(keys, sinks, compare, methods, callee, null);
+  }
+
+  boolean checked(List<List<String>> keys, List<Node.Group> sinks, boolean compare, boolean methods, Predicate<String> callee,
+    Token until) {
     List<Token> toks = new ArrayList<>();
     for (Token t : tokens) {
       if (!t.is("!")) {
@@ -370,6 +428,9 @@ final class ValueFlow {
         continue;
       }
       for (int i = 0; i + key.size() <= toks.size(); i++) {
+        if (until != null && pos(toks.get(i)) >= pos(until)) {
+          break;
+        }
         if (!matches(toks, i, key) || inSink(toks.get(i), sinks) || i > 0 && accessor(toks.get(i - 1))) {
           continue;
         }
@@ -449,12 +510,12 @@ final class ValueFlow {
   // ---------------------------------------------------------------- request values
 
   /**
-   * An expression that is a value from the request as it is: searchParams, params or form data (or, for HTML, a fetch
-   * response), a variable holding one, through getters ({@code .get('x')}, {@code .json()}), fallbacks
-   * ({@code x ?? '/'}), casts, {@code await}, {@code String()}, {@code decodeURIComponent()} and {@code new URL()}. A
-   * template literal counts when its first interpolation starts it and is such a value (anywhere for HTML), a
-   * concatenation when its first operand is (any operand for HTML). Any other call or operator means the value was
-   * transformed: not followed.
+   * An expression that is a value from the request as it is: searchParams, params, form data or a Pages Router
+   * {@code query} property (or, for HTML, a fetch response), a variable holding one, through getters
+   * ({@code .get('x')}, {@code .json()}), fallbacks ({@code x ?? '/'}), casts, {@code await}, {@code String()},
+   * {@code decodeURIComponent()} and {@code new URL()}. A template literal counts when its first interpolation starts
+   * it and is such a value (anywhere for HTML), a concatenation when its first operand is (any operand for HTML). Any
+   * other call or operator means the value was transformed: not followed.
    */
   static final class Direct implements Source {
 
@@ -462,7 +523,7 @@ final class ValueFlow {
     static final Set<String> GETTERS = Set.of("get", "getAll", "json", "text", "formData", "useSearchParams", "useParams", "then",
       "fetch");
     static final Set<String> PASSTHROUGH = Set.of("toString", "trim", "toLowerCase", "toUpperCase", "valueOf", "at");
-    private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then");
+    private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then", "query");
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
     private static final Set<String> FORM_GETTERS = Set.of("get", "getAll");
 
@@ -594,6 +655,8 @@ final class ValueFlow {
         source |= ROOTS.contains(n) && (route && !(k == 0 && locals.contains(n)) || !n.equals("params"))
           && !(k == 0 && n.equals("formData") && (names.size() < 2 || !FORM_GETTERS.contains(names.get(1))));
       }
+      // the query of a Pages Router request or router: req.query.next, router.query.returnUrl
+      source |= names.size() > 1 && names.subList(1, names.size()).contains("query");
       source |= html && "fetch".equals(root);
       if (!source) {
         return null;

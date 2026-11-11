@@ -38,7 +38,11 @@ extend "Next.js".
 ## Measures
 
 nx_routes, nx_client_modules, nx_server_modules, nx_shared_modules, nx_client_ratio, nx_server_actions,
-nx_unprotected_endpoints, nx_dynamic_routes, and nx_routes_json for the project page "Next.js".
+nx_unprotected_endpoints, nx_dynamic_routes, and nx_routes_json for the project page "Next.js": the route tree with a
+dot per route coloured by its issues and the client modules each pulls in, the client/server split, issues by rule
+and the Server Actions.
+
+![The Next.js project page](docs/images/nextjs-page.png)
 
 ## Command line
 

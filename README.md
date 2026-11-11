@@ -4,14 +4,22 @@ A SonarQube plugin that catches Next.js mistakes across the client/server bounda
 the browser, Server Actions and route handlers open to anyone, per-user data cached for everyone, App Router APIs
 misused. It builds a module graph of the app (client, server and shared modules and their imports) and checks it.
 
-The rules were validated on public apps of different shapes (App Router and Pages Router, monorepos, Server
-Action heavy apps): every issue reviewed, every false positive pattern fixed, so that each rule is right in at least
-9 of 10 cases. A 3700 file app scans in about 4 seconds.
+The rules were validated on public apps of different shapes, App Router and Pages Router, monorepos and apps heavy
+on Server Actions (vercel/commerce, shadcn-ui/taxonomy, cal.com, dub, documenso, inbox-zero, next-learn,
+saas-starter, subscription-payments and the Next.js examples): every issue reviewed and every false positive pattern
+fixed, so that each rule is right in at least 9 of 10 cases. A 3700 file app scans in about 4 seconds.
 
 ## Install
 
-Build with `./mvnw verify` (Java 21) and copy `target/sonar-nextjs-*.jar` to `extensions/plugins/` of SonarQube 10.12
-or later. The plugin analyses js and ts files of projects where a package.json declares a `next` dependency.
+Requires SonarQube Community Build 26.7 or later (tested on 26.7 with the community branch plugin, pull requests
+included, and on 26.10) and Java 21.
+
+1. Download `sonar-nextjs-<version>.jar` from the [releases](https://github.com/snake-in-prod/sonar-nextjs/releases).
+2. Copy it to `extensions/plugins/` of the SonarQube server and restart.
+3. Assign the "Next.js" profile, or add the rules to your own profile (see below).
+
+The plugin analyses js and ts files of projects where a package.json declares a `next` dependency; other projects
+are skipped. To build it yourself: `./mvnw verify`.
 
 ## Rules
 

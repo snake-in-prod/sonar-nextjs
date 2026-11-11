@@ -1,0 +1,30 @@
+<p>A route handler (<code>app/**/route.ts</code> or <code>route.js</code>) exporting <code>POST</code>,
+<code>PUT</code>, <code>PATCH</code> or <code>DELETE</code> that changes data (a database write, a POST, PUT, PATCH or
+DELETE <code>fetch</code>, a revalidation) and checks neither the session nor a token can be called by anyone.</p>
+<p>A session call (<code>auth()</code>, <code>getServerSession</code>, <code>currentUser</code>...), a project helper
+that makes one, a header or cookie read, a secret or token from the environment, or a signature check counts as a
+check. Auth, webhook, cron and other public-by-design paths are left out, and so are apps whose middleware checks the
+session.</p>
+<h2>Why is this an issue?</h2>
+<p>Route handlers are public URLs. Without a check, anyone who finds the URL can create, change or delete the data
+behind it.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+// app/api/items/route.ts
+export async function DELETE() { // Noncompliant
+  await db.item.deleteMany();
+  return new Response(null, { status: 204 });
+}
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+// app/api/items/route.ts
+export async function DELETE() {
+  const session = await auth();
+  if (!session?.user.isAdmin) {
+    return new Response('Forbidden', { status: 403 });
+  }
+  await db.item.deleteMany();
+  return new Response(null, { status: 204 });
+}
+</pre>

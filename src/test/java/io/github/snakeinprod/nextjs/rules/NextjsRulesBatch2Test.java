@@ -25,4 +25,19 @@ class NextjsRulesBatch2Test {
   void route_handler_guarded_by_middleware() {
     RuleVerifier.verify("RouteHandlerWithoutAuthMiddleware", new RouteHandlerWithoutAuth());
   }
+
+  @Test
+  void route_handler_outside_the_middleware_matcher() {
+    RuleVerifier.verify("RouteHandlerWithoutAuthMatcher", new RouteHandlerWithoutAuth());
+  }
+
+  @Test
+  void route_handler_in_an_app_without_sign_in() {
+    RuleVerifier.verify("RouteHandlerWithoutAuthPublic", new RouteHandlerWithoutAuth());
+  }
+
+  @Test
+  void route_handler_in_an_app_with_a_sign_up_route() {
+    RuleVerifier.verify("RouteHandlerWithoutAuthSignUp", new RouteHandlerWithoutAuth());
+  }
 }

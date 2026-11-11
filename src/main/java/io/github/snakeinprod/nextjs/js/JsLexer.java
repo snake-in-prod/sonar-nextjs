@@ -57,7 +57,8 @@ public final class JsLexer {
     while (pos < n) {
       char c = src.charAt(pos);
       char d = peek(1);
-      if (Character.isWhitespace(c)) {
+      // U+FEFF (a byte order mark) is whitespace in JavaScript
+      if (Character.isWhitespace(c) || c == '﻿') {
         adv();
       } else if (c == '/' && (d == '/' || d == '*')) {
         comment();

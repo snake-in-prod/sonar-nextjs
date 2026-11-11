@@ -3,8 +3,10 @@
 DELETE <code>fetch</code>, a revalidation) and checks neither the session nor a token can be called by anyone.</p>
 <p>A session call (<code>auth()</code>, <code>getServerSession</code>, <code>currentUser</code>...), a project helper
 that makes one, a header or cookie read, a secret or token from the environment, or a signature check counts as a
-check. Auth, webhook, cron and other public-by-design paths are left out, and so are apps whose middleware checks the
-session.</p>
+check. Auth, webhook, cron and other public-by-design paths are left out, and so are apps without sign-in (no auth
+library, no sign-in route: their data is public by design) and handlers whose app has a middleware that checks the
+session and whose <code>matcher</code> covers them. A middleware matcher leaving <code>/api</code> out does not guard
+the handlers.</p>
 <h2>Why is this an issue?</h2>
 <p>Route handlers are public URLs. Without a check, anyone who finds the URL can create, change or delete the data
 behind it.</p>

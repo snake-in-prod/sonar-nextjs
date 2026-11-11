@@ -298,7 +298,7 @@ public class ServerCodeInClientBundle implements NextRule {
    * The import is in the bundle when the module is: a static import or re-export, not type-only, whose names the
    * module uses as values (or a side effect import), and that the target does not export only as types.
    */
-  private static boolean loaded(NextModel model, Module m, Import i) {
+  static boolean loaded(NextModel model, Module m, Import i) {
     if (i.typeOnly() || i.dynamic() || isCall(m, i)) {
       return false;
     }

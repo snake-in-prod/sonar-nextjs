@@ -27,7 +27,8 @@ import java.util.regex.Pattern;
  * writes (a database write, a POST/PUT/PATCH/DELETE fetch without credentials, revalidatePath / revalidateTag) and never
  * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter,
  * guest cart, error monitoring and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
- * An action built with an action library is checked when its client middleware or procedure checks the session too.
+ * An action built with an action library is checked when its client middleware or procedure checks the session too,
+ * one built by a wrapper ({@code withAuth(async (...) => ...)}) when the wrapper does.
  * {@link Flow} holds what the endpoint rules share.
  */
 public class ServerActionWithoutAuth implements NextRule {
@@ -58,7 +59,8 @@ public class ServerActionWithoutAuth implements NextRule {
       }
       List<Chain> chains = Flow.chains(a.fn());
       if (flow.writes(m, chains, !GETTER.matcher(a.name().text()).lookingAt()) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
-        && flow.session(m, a.fn()) == Flow.Check.NO && (a.builder() == null || flow.builder(m, a.builder()) == Flow.Check.NO)) {
+        && flow.session(m, a.fn()) == Flow.Check.NO && (a.builder() == null || flow.builder(m, a.builder()) == Flow.Check.NO)
+        && (a.wrapper() == null || flow.session(a.wrapper().module(), a.wrapper().fn()) == Flow.Check.NO)) {
         ctx.report(a.name(), "Check the session in \"" + a.name().text() + "\" before it changes data: anyone can call a Server Action.");
       }
     }
@@ -75,9 +77,6 @@ public class ServerActionWithoutAuth implements NextRule {
     enum Check { YES, NO, UNKNOWN }
 
     record Decl(List<String> names, List<Node> init) {
-    }
-
-    record Found(Module module, JsTrees.Fn fn) {
     }
 
     private static final Set<String> KEYWORDS = Chains.keywords("js");
@@ -365,46 +364,10 @@ public class ServerActionWithoutAuth implements NextRule {
         if (t == null) {
           return PATH_LIKE.matcher(i.spec()).matches() ? Check.UNKNOWN : Check.NO;
         }
-        Found f = exported(t, imported, 0);
+        NextModel.Found f = model.exportedFunction(t, imported);
         return f == null ? Check.UNKNOWN : session(f.module(), f.fn(), depth + 1, seen);
       }
       return Check.NO;
-    }
-
-    /** The function a module exports under a name, re-exports followed; null when it is not a visible function. */
-    Found exported(Module t, String name, int depth) {
-      Export e = export(t, name, depth);
-      if (e == null) {
-        return null;
-      }
-      Module x = e.module();
-      JsTrees.Fn fn = x.functions().get(e.name().equals("default") && !x.functions().containsKey(e.local()) ? "default" : e.local());
-      return fn == null ? null : new Found(x, fn);
-    }
-
-    record Export(Module module, String name, String local) {
-    }
-
-    /** The module and local name a module exports under a name, re-exports followed; null when not found. */
-    private Export export(Module t, String name, int depth) {
-      if (depth > 4) {
-        return null;
-      }
-      Token local = t.exports().get(name);
-      if (local != null) {
-        return new Export(t, name, local.text());
-      }
-      for (Import i : t.imports()) {
-        String imported = i.names().containsKey(name) ? i.names().get(name) : i.names().containsKey("*") ? name : null;
-        Module next = model.target(i);
-        if (i.reExport() && imported != null && next != null) {
-          Export e = export(next, imported, depth + 1);
-          if (e != null) {
-            return e;
-          }
-        }
-      }
-      return null;
     }
 
     /**
@@ -465,7 +428,7 @@ public class ServerActionWithoutAuth implements NextRule {
         if (t == null) {
           return PATH_LIKE.matcher(i.spec()).matches() ? Check.UNKNOWN : Check.NO;
         }
-        Export e = export(t, imported, 0);
+        NextModel.Export e = model.exportOf(t, imported);
         return e == null ? Check.UNKNOWN : client(e.module(), e.local(), depth + 1, seen);
       }
       return Check.NO;

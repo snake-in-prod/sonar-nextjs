@@ -41,11 +41,11 @@ public final class TreeBuilder {
   }
 
   private static boolean isOpen(String s) {
-    return s.equals("(") || s.equals("[") || s.equals("{");
+    return s.length() == 1 && "([{".indexOf(s.charAt(0)) >= 0;
   }
 
   private static boolean isClose(String s) {
-    return s.equals(")") || s.equals("]") || s.equals("}");
+    return s.length() == 1 && ")]}".indexOf(s.charAt(0)) >= 0;
   }
 
   private static boolean matches(String open, String close) {

@@ -4,6 +4,7 @@ import io.github.snakeinprod.nextjs.parse.Lexed;
 import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -20,6 +21,21 @@ public final class JsLexer {
   private static final String[] OPERATORS = {">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
     "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "**", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "++", "--",
     "<<", ">>"};
+  /** {@link #OPERATORS} by first character, in their order (longest first). */
+  private static final String[][] OPERATORS_BY_START = new String[128][];
+  private static final String[] NO_OPERATORS = {};
+  /** One-character token texts, shared. */
+  private static final String[] ASCII = new String[128];
+
+  static {
+    for (char c = 0; c < 128; c++) {
+      char first = c;
+      OPERATORS_BY_START[c] = Arrays.stream(OPERATORS).filter(op -> op.charAt(0) == first).toArray(String[]::new);
+      ASCII[c] = String.valueOf(c);
+    }
+  }
+
+  private static final Set<String> NO_REGEX_AFTER = Set.of(")", "]", "++", "--");
   private static final String PUNCT = "()[]{};,<>+-*/%&|^!~?:=.@#";
   private static final Set<String> REGEX_AFTER_WORD = Set.of("return", "typeof", "case", "do", "else", "in", "of", "new",
     "delete", "void", "throw", "yield", "await", "instanceof");
@@ -34,6 +50,10 @@ public final class JsLexer {
   private int pos;
   private int line = 1;
   private int col;
+  /** Where the current token started, see {@link #start()}. */
+  private int tokPos;
+  private int tokLine;
+  private int tokCol;
 
   private JsLexer(String src, Jsx jsx) {
     this.src = src;
@@ -56,6 +76,12 @@ public final class JsLexer {
     int depth = 0;
     while (pos < n) {
       char c = src.charAt(pos);
+      if (c == ' ' || c == '\t') {
+        // adv() without the line check
+        pos++;
+        col++;
+        continue;
+      }
       char d = peek(1);
       // U+FEFF (a byte order mark) is whitespace in JavaScript
       if (Character.isWhitespace(c) || c == '﻿') {
@@ -65,24 +91,26 @@ public final class JsLexer {
       } else if (c == '#' && d == '!' && pos == 0) {
         lineComment();
       } else if (c == '\'' || c == '"') {
-        int[] s = mark();
+        start();
         skipString(c);
-        emit(TokenKind.STRING, s);
+        emit(TokenKind.STRING);
       } else if (c == '`') {
-        int[] s = mark();
+        start();
         skipTemplate();
-        emit(TokenKind.STRING, s);
+        emit(TokenKind.STRING);
       } else if (c == '/' && regexAllowed() && regex()) {
         // emitted
       } else if (Character.isDigit(c) || c == '.' && Character.isDigit(d)) {
         number();
       } else if (identStart(c) || c == '#' && identStart(d)) {
-        int[] s = mark();
-        adv();
+        start();
+        pos++;
+        // no line break in a name: the column moves by its length
         while (pos < n && identPart(src.charAt(pos))) {
-          adv();
+          pos++;
         }
-        emit(TokenKind.IDENT, s);
+        col += pos - tokPos;
+        emit(TokenKind.IDENT);
       } else if (c == '<' && jsxAllowed() && tryJsx()) {
         // emitted
       } else if (c == '{') {
@@ -102,25 +130,26 @@ public final class JsLexer {
   }
 
   private void operator() {
-    for (String op : OPERATORS) {
+    char c = src.charAt(pos);
+    for (String op : c < 128 ? OPERATORS_BY_START[c] : NO_OPERATORS) {
       if (src.startsWith(op, pos) && !(op.equals("?.") && Character.isDigit(peek(2)))) {
-        int[] s = mark();
+        start();
         for (int i = 0; i < op.length(); i++) {
           adv();
         }
-        emit(TokenKind.OP, s);
+        emit(TokenKind.OP);
         return;
       }
     }
     if (PUNCT.indexOf(src.charAt(pos)) >= 0) {
       single(TokenKind.OP);
     } else {
-      int[] s = mark();
+      start();
       int cp = src.codePointAt(pos);
       for (int i = 0; i < Character.charCount(cp); i++) {
         adv();
       }
-      emit(TokenKind.OTHER, s);
+      emit(TokenKind.OTHER);
     }
   }
 
@@ -129,7 +158,7 @@ public final class JsLexer {
       lineComment();
       return;
     }
-    int[] s = mark();
+    start();
     adv();
     adv();
     while (pos < n && !(src.charAt(pos) == '*' && peek(1) == '/')) {
@@ -139,15 +168,16 @@ public final class JsLexer {
       adv();
       adv();
     }
-    comments.add(token(TokenKind.OTHER, s));
+    comments.add(token(TokenKind.OTHER));
   }
 
   private void lineComment() {
-    int[] s = mark();
+    start();
     while (pos < n && src.charAt(pos) != '\n' && src.charAt(pos) != '\r') {
-      adv();
+      pos++;
+      col++;
     }
-    comments.add(token(TokenKind.OTHER, s));
+    comments.add(token(TokenKind.OTHER));
   }
 
   /** A '...' or "..." string; an unterminated one ends at the line end. */
@@ -166,7 +196,8 @@ public final class JsLexer {
       } else if (c == '\n' || c == '\r') {
         return;
       } else {
-        adv();
+        pos++;
+        col++;
       }
     }
   }
@@ -236,7 +267,7 @@ public final class JsLexer {
       return true;
     }
     return switch (prev.kind()) {
-      case OP -> !Set.of(")", "]", "++", "--").contains(prev.text());
+      case OP -> !NO_REGEX_AFTER.contains(prev.text());
       case IDENT -> REGEX_AFTER_WORD.contains(prev.text());
       default -> false;
     };
@@ -277,7 +308,7 @@ public final class JsLexer {
   }
 
   private void number() {
-    int[] s = mark();
+    start();
     boolean radix = src.charAt(pos) == '0' && "xXoObB".indexOf(peek(1)) >= 0;
     boolean dot = false;
     if (radix) {
@@ -300,7 +331,7 @@ public final class JsLexer {
         break;
       }
     }
-    emit(TokenKind.NUMBER, s);
+    emit(TokenKind.NUMBER);
   }
 
   // ---------------------------------------------------------------- JSX
@@ -373,10 +404,10 @@ public final class JsLexer {
       }
       char c = src.charAt(pos);
       if (c == '/' && peek(1) == '>') {
-        int[] s = mark();
+        start();
         adv();
         adv();
-        emit(TokenKind.OP, s);
+        emit(TokenKind.OP);
         return true;
       } else if (c == '>') {
         single(TokenKind.OP);
@@ -408,7 +439,7 @@ public final class JsLexer {
     }
     char c = src.charAt(pos);
     if (c == '"' || c == '\'') {
-      int[] s = mark();
+      start();
       adv();
       while (pos < n && src.charAt(pos) != c) {
         adv();
@@ -417,7 +448,7 @@ public final class JsLexer {
         return false;
       }
       adv();
-      emit(TokenKind.STRING, s);
+      emit(TokenKind.STRING);
       return true;
     }
     if (c == '{') {
@@ -436,10 +467,10 @@ public final class JsLexer {
           return false;
         }
       } else if (c == '<' && peek(1) == '/') {
-        int[] s = mark();
+        start();
         adv();
         adv();
-        emit(TokenKind.OP, s);
+        emit(TokenKind.OP);
         skipSpace();
         String closing = pos < n && identStart(src.charAt(pos)) ? tagName() : null;
         skipSpace();
@@ -462,17 +493,23 @@ public final class JsLexer {
   /** JSX text up to the next "{" or "<", as one OTHER token without surrounding whitespace. */
   private void text() {
     skipSpace();
-    int[] s = mark();
-    int[] end = s;
+    int startPos = pos;
+    int startLine = line;
+    int startCol = col;
+    int endPos = -1;
+    int endLine = 0;
+    int endCol = 0;
     while (pos < n && src.charAt(pos) != '{' && src.charAt(pos) != '<') {
       boolean ws = Character.isWhitespace(src.charAt(pos));
       adv();
       if (!ws) {
-        end = mark();
+        endPos = pos;
+        endLine = line;
+        endCol = col;
       }
     }
-    if (end != s) {
-      tokens.add(new Token(TokenKind.OTHER, src.substring(s[0], end[0]), s[1], s[2], end[1], end[2]));
+    if (endPos >= 0) {
+      tokens.add(new Token(TokenKind.OTHER, src.substring(startPos, endPos), startLine, startCol, endLine, endCol));
     }
   }
 
@@ -480,20 +517,20 @@ public final class JsLexer {
     if (pos >= n || !identStart(src.charAt(pos))) {
       return null;
     }
-    int[] s = mark();
+    start();
     while (pos < n && (identPart(src.charAt(pos)) || "-.:".indexOf(src.charAt(pos)) >= 0)) {
       adv();
     }
-    emit(TokenKind.IDENT, s);
-    return src.substring(s[0], pos);
+    emit(TokenKind.IDENT);
+    return src.substring(tokPos, pos);
   }
 
   private void attrName() {
-    int[] s = mark();
+    start();
     while (pos < n && (identPart(src.charAt(pos)) || src.charAt(pos) == '-' || src.charAt(pos) == ':')) {
       adv();
     }
-    emit(TokenKind.IDENT, s);
+    emit(TokenKind.IDENT);
   }
 
   private void skipTagSpace() {
@@ -541,25 +578,47 @@ public final class JsLexer {
     col = m[2];
   }
 
+  /** Starts a token here, ended by {@link #emit(TokenKind)}; nothing between them starts another. */
+  private void start() {
+    tokPos = pos;
+    tokLine = line;
+    tokCol = col;
+  }
+
   private void single(TokenKind kind) {
-    int[] s = mark();
+    start();
     adv();
-    emit(kind, s);
+    emit(kind);
+  }
+
+  private void emit(TokenKind kind) {
+    tokens.add(token(kind));
   }
 
   private void emit(TokenKind kind, int[] s) {
-    tokens.add(token(kind, s));
+    tokens.add(token(kind, s[0], s[1], s[2]));
   }
 
-  private Token token(TokenKind kind, int[] s) {
-    return new Token(kind, src.substring(s[0], pos), s[1], s[2], line, col);
+  private Token token(TokenKind kind) {
+    return token(kind, tokPos, tokLine, tokCol);
+  }
+
+  private Token token(TokenKind kind, int from, int fromLine, int fromCol) {
+    String text = pos == from + 1 && src.charAt(from) < 128 ? ASCII[src.charAt(from)] : src.substring(from, pos);
+    return new Token(kind, text, fromLine, fromCol, line, col);
   }
 
   private static boolean identStart(char c) {
+    if (c < 128) {
+      return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '$';
+    }
     return Character.isJavaIdentifierStart(c);
   }
 
   private static boolean identPart(char c) {
+    if (c < 128) {
+      return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$';
+    }
     return Character.isJavaIdentifierPart(c) && !Character.isIdentifierIgnorable(c);
   }
 }

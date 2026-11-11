@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +71,9 @@ public class ServerCodeInClientBundle implements NextRule {
   }
 
   private final Map<Module, Optional<Finding>> reached = new HashMap<>();
+  // the walks from each client import cross the same modules: their imports are looked at once
+  private final Map<Import, Boolean> loadedImports = new IdentityHashMap<>();
+  private final Map<Import, Optional<String>> reasons = new IdentityHashMap<>();
   private final Map<String, Set<String>> configEnv = new HashMap<>();
 
   @Override
@@ -79,10 +83,10 @@ public class ServerCodeInClientBundle implements NextRule {
       return;
     }
     for (Import i : m.imports()) {
-      if (!loaded(ctx.model(), m, i)) {
+      if (!isLoaded(ctx.model(), m, i)) {
         continue;
       }
-      String own = packageReason(m, i);
+      String own = reason(m, i);
       if (own != null) {
         ctx.report(i.token(), "Remove this import from the client component: it pulls " + own + " into the browser bundle.");
         continue;
@@ -116,10 +120,10 @@ public class ServerCodeInClientBundle implements NextRule {
     while (!queue.isEmpty() && out.isEmpty()) {
       Module v = queue.poll();
       for (Import i : v.imports()) {
-        if (out.isPresent() || !loaded(model, v, i)) {
+        if (out.isPresent() || !isLoaded(model, v, i)) {
           continue;
         }
-        String r = packageReason(v, i);
+        String r = reason(v, i);
         if (r != null && !r.startsWith(CRYPTO)) {
           out = Optional.of(new Finding(r, v));
         }
@@ -140,7 +144,7 @@ public class ServerCodeInClientBundle implements NextRule {
   private Optional<Finding> direct(NextModel model, Module t, Import i) {
     Set<String> names = i.reExport() || i.names().isEmpty() || i.names().containsValue("*") ? null : Set.copyOf(i.names().values());
     for (Import j : t.imports()) {
-      if (loaded(model, t, j)) {
+      if (isLoaded(model, t, j)) {
         for (Map.Entry<Token, String> u : cryptoUses(t, j).entrySet()) {
           if (kept(t, u.getKey(), names)) {
             return Optional.of(new Finding(CRYPTO + u.getValue() + ")", t));
@@ -236,6 +240,14 @@ public class ServerCodeInClientBundle implements NextRule {
     return new Stmt(declared, out, function);
   }
 
+  private boolean isLoaded(NextModel model, Module m, Import i) {
+    return loadedImports.computeIfAbsent(i, k -> loaded(model, m, k));
+  }
+
+  private String reason(Module m, Import i) {
+    return reasons.computeIfAbsent(i, k -> Optional.ofNullable(packageReason(m, k))).orElse(null);
+  }
+
   /** What a package import brings that must stay on the server, or null. */
   private static String packageReason(Module m, Import i) {
     String spec = i.spec();
@@ -268,7 +280,7 @@ public class ServerCodeInClientBundle implements NextRule {
     }
     for (Map.Entry<String, String> n : i.names().entrySet()) {
       if (NODE_CRYPTO.contains(n.getValue())) {
-        valueUses(m, i, n.getKey()).forEach(t -> out.putIfAbsent(t, n.getValue()));
+        valueUses(m, i, n.getKey(), false).forEach(t -> out.putIfAbsent(t, n.getValue()));
       }
       if (n.getValue().equals("default") || n.getValue().equals("*")) {
         for (Chain c : m.file().chains()) {
@@ -301,7 +313,7 @@ public class ServerCodeInClientBundle implements NextRule {
   /** {@code require('x')}: the specifier is an argument. */
   private static boolean isCall(Module m, Import i) {
     List<Token> t = m.file().tokens();
-    int k = t.indexOf(i.token());
+    int k = m.file().indexOf(i.token());
     return k > 0 && t.get(k - 1).is("(");
   }
 
@@ -310,18 +322,19 @@ public class ServerCodeInClientBundle implements NextRule {
    * Positions that are or may be types are not values: after ":", "extends", "typeof", "|", inside generics.
    */
   private static boolean valueUse(Module m, Import i, String local) {
-    return !valueUses(m, i, local).isEmpty();
+    return !valueUses(m, i, local, true).isEmpty();
   }
 
-  private static List<Token> valueUses(Module m, Import i, String local) {
+  /** The value uses, or only the first one. */
+  private static List<Token> valueUses(Module m, Import i, String local, boolean first) {
     List<Token> out = new ArrayList<>();
     List<Token> t = m.file().tokens();
-    int spec = t.indexOf(i.token());
+    int spec = m.file().indexOf(i.token());
     int start = spec;
     while (start > 0 && !t.get(start).isIdent("import") && !t.get(start).isIdent("export")) {
       start--;
     }
-    for (int k = 0; k < t.size(); k++) {
+    for (int k = 0; k < t.size() && !(first && !out.isEmpty()); k++) {
       if (k >= start && k <= spec || !t.get(k).isIdent(local)) {
         continue;
       }

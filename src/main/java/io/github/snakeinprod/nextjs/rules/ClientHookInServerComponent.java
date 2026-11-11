@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Server components should not call client hooks: a call of a client-only hook imported from react, react-dom or
@@ -29,6 +30,8 @@ public class ClientHookInServerComponent implements NextRule {
     "react-dom", Set.of("useFormStatus", "useFormState"),
     "next/navigation", Set.of("useRouter", "usePathname", "useSearchParams", "useParams", "useSelectedLayoutSegment",
       "useSelectedLayoutSegments", "useServerInsertedHTML"));
+
+  private static final Pattern TEST_PATH = Pattern.compile(".*(\\.(test|spec|stories)\\.[^/]+|__tests__/.*)");
 
   private NextModel serverGraphModel;
   private Set<Module> serverGraph;
@@ -86,7 +89,7 @@ public class ClientHookInServerComponent implements NextRule {
       for (Module r : ctx.model().modules()) {
         if (r.route() != null && r.route().router().equals("app") && r.role() == Role.SERVER) {
           serverGraph.addAll(ctx.model().reachable(r, x -> x.role() == Role.SERVER
-            && !x.path().matches(".*(\\.(test|spec|stories)\\.[^/]+|__tests__/.*)")));
+            && !TEST_PATH.matcher(x.path()).matches()));
         }
       }
     }

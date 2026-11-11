@@ -2,6 +2,7 @@ package io.github.snakeinprod.nextjs.model;
 
 import io.github.snakeinprod.nextjs.js.JsTrees;
 import io.github.snakeinprod.nextjs.parse.Chain;
+import io.github.snakeinprod.nextjs.parse.Chains;
 import io.github.snakeinprod.nextjs.parse.Node;
 import io.github.snakeinprod.nextjs.parse.Nodes;
 import io.github.snakeinprod.nextjs.parse.ParsedFile;
@@ -100,7 +101,12 @@ final class ModuleReader {
     }
     actions.sort((a, b) -> compare(a.name(), b.name()));
     List<EnvRead> env = new ArrayList<>();
-    for (Chain c : file.chains()) {
+    // the "process" chains only: the others are built when a rule asks for them
+    boolean process = false;
+    for (int i = 0; i < tokens.size() && !process; i++) {
+      process = tokens.get(i).isIdent("process");
+    }
+    for (Chain c : process ? Chains.in(root, Chains.keywords(file.language()), "process") : List.<Chain>of()) {
       List<Chain.Segment> s = c.segments();
       if (s.size() >= 3 && c.firstName().equals("process") && s.get(1) instanceof Chain.Name n && n.token().is("env")) {
         if (s.get(2) instanceof Chain.Name v) {
@@ -202,18 +208,27 @@ final class ModuleReader {
       out.add(make(file, resolver, spec, names, typeOnly, isExport, false));
       i = j;
     }
-    Nodes.groups(file.root(), g -> {
-      List<Node> k = g.children();
-      for (int i = 0; i + 1 < k.size(); i++) {
-        boolean req = Nodes.isIdent(k.get(i), "require");
-        boolean dyn = Nodes.isIdent(k.get(i), "import");
-        if ((req || dyn) && !(i > 0 && Nodes.isLeaf(k.get(i - 1), ".")) && k.get(i + 1) instanceof Node.Group call && call.is("(")
-          && !call.children().isEmpty() && Nodes.leaf(call.children().get(0)) != null
-          && Nodes.leaf(call.children().get(0)).kind() == TokenKind.STRING) {
-          out.add(make(file, resolver, Nodes.leaf(call.children().get(0)), Map.of(), false, false, dyn));
+    // a require() or import() call needs one of these tokens: most files have none and skip the walk
+    List<Token> tokens = file.tokens();
+    boolean calls = false;
+    for (int i = 0; i < tokens.size() && !calls; i++) {
+      Token t = tokens.get(i);
+      calls = t.isIdent("require") || t.isIdent("import") && i + 1 < tokens.size() && tokens.get(i + 1).is("(");
+    }
+    if (calls) {
+      Nodes.groups(file.root(), g -> {
+        List<Node> k = g.children();
+        for (int i = 0; i + 1 < k.size(); i++) {
+          boolean req = Nodes.isIdent(k.get(i), "require");
+          boolean dyn = Nodes.isIdent(k.get(i), "import");
+          if ((req || dyn) && !(i > 0 && Nodes.isLeaf(k.get(i - 1), ".")) && k.get(i + 1) instanceof Node.Group call && call.is("(")
+            && !call.children().isEmpty() && Nodes.leaf(call.children().get(0)) != null
+            && Nodes.leaf(call.children().get(0)).kind() == TokenKind.STRING) {
+            out.add(make(file, resolver, Nodes.leaf(call.children().get(0)), Map.of(), false, false, dyn));
+          }
         }
-      }
-    });
+      });
+    }
     out.sort((a, b) -> compare(a.token(), b.token()));
     return out;
   }

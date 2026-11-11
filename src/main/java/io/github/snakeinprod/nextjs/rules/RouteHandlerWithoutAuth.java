@@ -42,6 +42,9 @@ public class RouteHandlerWithoutAuth implements NextRule {
 
   private ServerActionWithoutAuth.Flow flow;
   private final Map<String, Boolean> signIn = new HashMap<>();
+  /** The middleware modules, in model order, and whether each checks the caller: looked up once, not per handler. */
+  private List<Module> middlewares;
+  private final Map<Module, Boolean> guards = new HashMap<>();
 
   @Override
   public void check(RuleContext ctx) {
@@ -110,19 +113,27 @@ public class RouteHandlerWithoutAuth implements NextRule {
         app = a.dir();
       }
     }
-    for (Module mw : model.modules()) {
-      if (mw.route() == null || !mw.route().kind().equals("middleware") || !mw.path().startsWith(app) || !matches(mw, route.url())) {
-        continue;
+    if (middlewares == null) {
+      middlewares = model.modules().stream().filter(x -> x.route() != null && x.route().kind().equals("middleware")).toList();
+    }
+    for (Module mw : middlewares) {
+      if (mw.path().startsWith(app) && matches(mw, route.url()) && guards.computeIfAbsent(mw, RouteHandlerWithoutAuth::checksCaller)) {
+        return true;
       }
-      for (Import i : mw.imports()) {
-        if (AUTH_SPEC.matcher(i.spec()).matches()) {
-          return true;
-        }
+    }
+    return false;
+  }
+
+  /** The middleware imports an auth library or checks the session. */
+  private static boolean checksCaller(Module mw) {
+    for (Import i : mw.imports()) {
+      if (AUTH_SPEC.matcher(i.spec()).matches()) {
+        return true;
       }
-      for (Chain c : mw.file().chains()) {
-        if (ServerActionWithoutAuth.Flow.calls(c, ServerActionWithoutAuth.Flow::isSessionCall)) {
-          return true;
-        }
+    }
+    for (Chain c : mw.file().chains()) {
+      if (ServerActionWithoutAuth.Flow.calls(c, ServerActionWithoutAuth.Flow::isSessionCall)) {
+        return true;
       }
     }
     return false;

@@ -3,10 +3,14 @@ package io.github.snakeinprod.nextjs.js;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import io.github.snakeinprod.nextjs.model.NextModel;
+import io.github.snakeinprod.nextjs.parse.Chains;
 import io.github.snakeinprod.nextjs.parse.Lexed;
+import io.github.snakeinprod.nextjs.parse.ParsedFile;
 import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class JsLexerTest {
@@ -128,5 +132,20 @@ class JsLexerTest {
       assertThatCode(() -> JsLexer.lex("a.js", "js", src)).doesNotThrowAnyException();
     }
     assertThat(ofKind("a.js", "a § b", TokenKind.OTHER)).containsExactly("§");
+  }
+
+  @Test
+  void shortcuts_give_what_the_full_scans_give() {
+    String src = "import a from 'a';\nconst x = process.env.A ?? process?.env['B'];\nfoo.process.env.C; process!.env.D;"
+      + "\nexport default () => <div className=\"c\">{process.env.E}\t text </div>;";
+    ParsedFile f = NextModel.parse("a.tsx", src);
+    Set<String> keywords = Chains.keywords("ts");
+    assertThat(Chains.in(f.root(), keywords, "process"))
+      .isEqualTo(Chains.in(f.root(), keywords).stream().filter(c -> c.firstName().equals("process")).toList())
+      .hasSize(4);
+    for (int i = 0; i < f.tokens().size(); i++) {
+      assertThat(f.indexOf(f.tokens().get(i))).isEqualTo(i);
+    }
+    assertThat(f.indexOf(new Token(TokenKind.IDENT, "nope", 1, 0, 1, 4))).isEqualTo(-1);
   }
 }

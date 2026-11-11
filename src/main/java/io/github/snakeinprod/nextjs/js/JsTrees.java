@@ -108,7 +108,8 @@ public final class JsTrees {
         }
       }
       params = p;
-    } else if (first instanceof Node.Leaf l && l.token().kind() == TokenKind.IDENT && !Chains.keywords("js").contains(l.token().text())) {
+    } else if (first instanceof Node.Leaf l && l.token().kind() == TokenKind.IDENT && i + 1 < kids.size()
+      && Nodes.isLeaf(kids.get(i + 1), "=>") && !Chains.keywords("js").contains(l.token().text())) {
       arrow = i + 1;
       param = l.token();
     } else {

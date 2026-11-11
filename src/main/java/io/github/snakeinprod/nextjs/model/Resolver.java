@@ -5,12 +5,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * Resolves import specifiers to project files, in TypeScript's order: relative paths; then, with the nearest
@@ -20,6 +22,8 @@ import java.util.function.Function;
  */
 final class Resolver {
 
+  private static final Pattern JS_FILE = Pattern.compile(".*\\.[cm]?jsx?");
+  private static final Pattern DECLARATION = Pattern.compile(".*\\.d\\.[cm]?ts");
   static final List<String> EXTENSIONS = List.of(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts");
 
   /** Effective compiler options of one config file: directories end with "/" ("" is the base directory). */
@@ -29,19 +33,31 @@ final class Resolver {
   private final Set<String> paths;
   private final Function<String, String> read;
   private final Map<String, Config> configs = new HashMap<>();
+  /** Results by importing directory and specifier: a monorepo imports the same few specifiers from thousands of files. */
+  private final Map<String, String> resolved = new HashMap<>();
+  private final Map<String, JsonObject> packageJsons = new HashMap<>();
   private Map<String, String> packages;
 
   Resolver(Set<String> paths, Function<String, String> read) {
-    this.paths = paths;
+    this.paths = new HashSet<>(paths);
     this.read = read;
   }
 
   /** The project file {@code spec} names when imported from {@code from}, or null. */
   String resolve(String from, String spec) {
-    if (spec.startsWith(".") || spec.startsWith("/")) {
-      return file(join(spec.startsWith("/") ? "" : dir(from), spec));
+    String dir = dir(from);
+    String key = dir + "\0" + spec;
+    if (!resolved.containsKey(key)) {
+      resolved.put(key, resolveFrom(dir, spec));
     }
-    Config c = config(dir(from));
+    return resolved.get(key);
+  }
+
+  private String resolveFrom(String dir, String spec) {
+    if (spec.startsWith(".") || spec.startsWith("/")) {
+      return file(join(spec.startsWith("/") ? "" : dir, spec));
+    }
+    Config c = config(dir);
     if (c != null) {
       String r = withConfig(c, spec);
       if (r != null) {
@@ -91,18 +107,28 @@ final class Resolver {
     if (base == null) {
       return null;
     }
-    List<String> candidates = new ArrayList<>(List.of(base));
-    for (String ext : EXTENSIONS) {
-      candidates.add(base + ext);
+    if (paths.contains(base)) {
+      return base;
     }
     for (String ext : EXTENSIONS) {
-      candidates.add(base + "/index" + ext);
+      if (paths.contains(base + ext)) {
+        return base + ext;
+      }
     }
-    if (base.matches(".*\\.[cm]?jsx?")) {
+    for (String ext : EXTENSIONS) {
+      if (paths.contains(base + "/index" + ext)) {
+        return base + "/index" + ext;
+      }
+    }
+    if (JS_FILE.matcher(base).matches()) {
       String stem = base.substring(0, base.lastIndexOf('.'));
-      candidates.addAll(List.of(stem + ".ts", stem + ".tsx", stem + ".mts", stem + ".cts"));
+      for (String ext : List.of(".ts", ".tsx", ".mts", ".cts")) {
+        if (paths.contains(stem + ext)) {
+          return stem + ext;
+        }
+      }
     }
-    return candidates.stream().filter(paths::contains).findFirst().orElse(null);
+    return null;
   }
 
   // ---------------------------------------------------------------- tsconfig / jsconfig
@@ -217,7 +243,10 @@ final class Resolver {
     if (dir == null) {
       return null;
     }
-    JsonObject json = Jsonc.parse(read.apply(dir + "package.json"));
+    if (!packageJsons.containsKey(dir)) {
+      packageJsons.put(dir, Jsonc.parse(read.apply(dir + "package.json")));
+    }
+    JsonObject json = packageJsons.get(dir);
     List<String> candidates = new ArrayList<>();
     if (parts.length > n) {
       JsonObject exports = Jsonc.object(json, "exports");
@@ -232,7 +261,7 @@ final class Resolver {
     }
     for (String c : candidates) {
       String r = file(join(dir, c));
-      if (r != null && !r.matches(".*\\.d\\.[cm]?ts")) {
+      if (r != null && !DECLARATION.matcher(r).matches()) {
         return r;
       }
     }

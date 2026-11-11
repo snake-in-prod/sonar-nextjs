@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -32,6 +33,8 @@ public final class NextModel {
 
   private static final Pattern SOURCE = Pattern.compile(".*\\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$");
   private static final Pattern DECLARATION = Pattern.compile(".*\\.d\\.[cm]?ts$");
+  private static final Pattern TS = Pattern.compile(".*\\.[cm]?tsx?$");
+  private static final Pattern MIDDLEWARE = Pattern.compile("(src/)?(middleware|proxy)\\.(js|ts|mjs|mts)");
   private static final Pattern MAJOR = Pattern.compile("(\\d+)\\.");
   private static final Set<String> APP_CONVENTIONS = Set.of("page", "layout", "route", "loading", "error", "global-error",
     "not-found", "template", "default");
@@ -48,12 +51,16 @@ public final class NextModel {
   private static final Pattern CONVENTION_FILE = Pattern.compile("([^/.]+)\\.(js|jsx|ts|tsx)");
 
   private final Map<String, Module> modules;
+  /** The same modules for lookups: comparing long paths in the sorted map costs more than hashing them. */
+  private final Map<String, Module> byPath;
   private final List<NextApp> apps;
   private final Map<Module, Set<Module>> importers = new HashMap<>();
+  private final Map<Module, List<Module>> imported = new HashMap<>();
   private final List<String> skipped;
 
   private NextModel(Map<String, Module> modules, List<NextApp> apps, List<String> skipped) {
     this.modules = modules;
+    this.byPath = new HashMap<>(modules);
     this.apps = apps;
     this.skipped = skipped;
   }
@@ -69,12 +76,23 @@ public final class NextModel {
         paths.add(p);
       }
     }
-    Resolver resolver = new Resolver(paths, project::read);
+    // package.json and tsconfig.json are asked for once per directory by apps(), the resolver and its packages
+    Map<String, String> configs = new HashMap<>();
+    Function<String, String> reader = p -> {
+      if (SOURCE.matcher(p).matches()) {
+        return project.read(p);
+      }
+      if (!configs.containsKey(p)) {
+        configs.put(p, project.read(p));
+      }
+      return configs.get(p);
+    };
+    Resolver resolver = new Resolver(paths, reader);
     Map<String, Module> modules = new TreeMap<>();
     List<String> skipped = new ArrayList<>();
     for (String p : paths) {
       try {
-        String source = project.read(p);
+        String source = reader.apply(p);
         if (source == null) {
           skipped.add(p);
           continue;
@@ -86,14 +104,14 @@ public final class NextModel {
         skipped.add(p + ": " + e);
       }
     }
-    NextModel model = new NextModel(modules, apps(paths, project), List.copyOf(skipped));
+    NextModel model = new NextModel(modules, apps(paths, reader), List.copyOf(skipped));
     model.link();
     return model;
   }
 
   /** Lexes and builds the token tree of one file; the language is "ts" for TypeScript extensions, else "js". */
   public static ParsedFile parse(String path, String source) {
-    String language = path.matches(".*\\.[cm]?tsx?$") ? "ts" : "js";
+    String language = TS.matcher(path).matches() ? "ts" : "js";
     Lexed l = JsLexer.lex(path, language, source);
     return new ParsedFile(path, language, source, l.tokens(), l.comments());
   }
@@ -107,12 +125,12 @@ public final class NextModel {
 
   /** The module of a project path, or null. */
   public Module module(String path) {
-    return modules.get(path);
+    return byPath.get(path);
   }
 
   /** The module an import resolves to, or null (a package, a built-in, or a file the model did not read). */
   public Module target(Import i) {
-    return i.resolved() == null ? null : modules.get(i.resolved());
+    return i.resolved() == null ? null : byPath.get(i.resolved());
   }
 
   /**
@@ -121,6 +139,10 @@ public final class NextModel {
    * the compiler erases both.
    */
   public List<Module> imported(Module m) {
+    return imported.computeIfAbsent(m, this::importedOf);
+  }
+
+  private List<Module> importedOf(Module m) {
     Set<Module> out = new LinkedHashSet<>();
     for (Import i : m.imports()) {
       Module t = i.typeOnly() ? null : target(i);
@@ -258,10 +280,10 @@ public final class NextModel {
 
   // ---------------------------------------------------------------- building
 
-  private static List<NextApp> apps(Set<String> paths, Project project) {
+  private static List<NextApp> apps(Set<String> paths, Function<String, String> read) {
     List<NextApp> out = new ArrayList<>();
     for (String dir : Resolver.directories(paths)) {
-      JsonObject json = Jsonc.parse(project.read(dir + "package.json"));
+      JsonObject json = Jsonc.parse(read.apply(dir + "package.json"));
       String version = null;
       for (String deps : List.of("dependencies", "devDependencies", "peerDependencies")) {
         String v = Jsonc.string(Jsonc.object(json, deps), "next");
@@ -273,7 +295,7 @@ public final class NextModel {
       int major = major(version);
       // "latest", "canary", "workspace:*", "catalog:": the installed version, here or hoisted above
       for (String d = dir; major == 0; d = Resolver.dir(d.substring(0, d.length() - 1))) {
-        major = major(Jsonc.string(Jsonc.parse(project.read(d + "node_modules/next/package.json")), "version"));
+        major = major(Jsonc.string(Jsonc.parse(read.apply(d + "node_modules/next/package.json")), "version"));
         if (d.isEmpty()) {
           break;
         }
@@ -300,7 +322,8 @@ public final class NextModel {
     importers.replaceAll((k, v) -> Set.copyOf(v));
     // client: "use client" modules and what they import; a "use server" module imported there is a reference, not code
     for (Module m : modules.values()) {
-      if (m.has(Directive.USE_CLIENT) && !m.test) {
+      // a module already client was entered from an earlier one, and so was everything it reaches
+      if (m.has(Directive.USE_CLIENT) && !m.test && m.role != Role.CLIENT) {
         for (Module c : reachable(m, t -> !t.has(Directive.USE_SERVER) && !t.test)) {
           c.role = Role.CLIENT;
         }
@@ -359,7 +382,7 @@ public final class NextModel {
         return;
       }
     }
-    if (rest.matches("(src/)?(middleware|proxy)\\.(js|ts|mjs|mts)")) {
+    if (MIDDLEWARE.matcher(rest).matches()) {
       m.route = new Route("middleware", "middleware", null, false);
     }
   }

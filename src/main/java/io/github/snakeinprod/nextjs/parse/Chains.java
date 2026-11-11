@@ -44,6 +44,28 @@ public final class Chains {
     return out;
   }
 
+  /**
+   * The chains of {@link #in(Node.Group, Set)} that start with an identifier of this text, without building the others.
+   * A chain starts at every index where {@link #chainEnd} finds one: inside a chain no identifier can start another.
+   */
+  public static List<Chain> in(Node.Group root, Set<String> keywords, String first) {
+    List<Chain> out = new ArrayList<>();
+    Nodes.groups(root, g -> {
+      List<Node> kids = g.children();
+      for (int i = 0; i < kids.size(); i++) {
+        if (Nodes.isIdent(kids.get(i), first)) {
+          int end = chainEnd(g, i, keywords);
+          if (end > i) {
+            out.add(build(g, i, end));
+          }
+        }
+      }
+    });
+    out.sort((a, b) -> a.first().line() != b.first().line() ? Integer.compare(a.first().line(), b.first().line())
+      : Integer.compare(a.first().column(), b.first().column()));
+    return out;
+  }
+
   /** The chains that start directly in this group's children (not nested). */
   public static List<Chain> direct(Node.Group group) {
     return direct(group, COMMON);

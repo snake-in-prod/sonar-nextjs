@@ -45,6 +45,9 @@ public class SearchParamsWithoutSuspense implements NextRule {
   private Map<Module, Boolean> dynamicCache;
   private Map<Module, Map<Module, Set<String>>> rendersCache;
   private Map<Module, Optional<String>> staticCache;
+  private Map<Module, Boolean> isStaticCache;
+  /** The App Router modules of the model, in model order: the loops below look at nothing else. */
+  private List<Module> appModules;
   private final Map<String, Boolean> optedOut = new HashMap<>();
 
   @Override
@@ -61,11 +64,13 @@ public class SearchParamsWithoutSuspense implements NextRule {
       dynamicCache = new HashMap<>();
       rendersCache = new HashMap<>();
       staticCache = new HashMap<>();
+      isStaticCache = new HashMap<>();
+      appModules = ctx.model().modules().stream().filter(x -> x.route() != null && x.route().router().equals("app")).toList();
     }
     NextModel model = ctx.model();
     String page = null;
     Set<String> names = hookExports(m, calls);
-    for (Module entry : model.modules()) {
+    for (Module entry : appModules) {
       Route r = entry.route();
       if (r == null || !r.router().equals("app") || !(r.kind().equals("page") || r.kind().equals("layout"))) {
         continue;
@@ -115,7 +120,7 @@ public class SearchParamsWithoutSuspense implements NextRule {
   private String staticPageAround(NextModel model, Module entry) {
     String dir = dir(entry.path());
     boolean layout = entry.route().kind().equals("layout");
-    for (Module other : model.modules()) {
+    for (Module other : appModules) {
       Route r = other.route();
       if (r != null && r.router().equals("app") && r.kind().equals("loading")) {
         String d = dir(other.path());
@@ -134,7 +139,7 @@ public class SearchParamsWithoutSuspense implements NextRule {
     if (!layout) {
       return isStatic(model, entry) ? entry.route().url() : null;
     }
-    for (Module p : model.modules()) {
+    for (Module p : appModules) {
       Route r = p.route();
       if (r != null && r.router().equals("app") && r.kind().equals("page") && (dir(p.path()).equals(dir) || under(dir(p.path()), dir))
         && isStatic(model, p)) {
@@ -145,12 +150,16 @@ public class SearchParamsWithoutSuspense implements NextRule {
   }
 
   private boolean isStatic(NextModel model, Module page) {
+    return isStaticCache.computeIfAbsent(page, p -> computeStatic(model, p));
+  }
+
+  private boolean computeStatic(NextModel model, Module page) {
     if (page.route().dynamic() && !page.exports().containsKey("generateStaticParams")) {
       return false;
     }
     String dir = dir(page.path());
     List<Module> scope = new ArrayList<>(List.of(page));
-    for (Module l : model.modules()) {
+    for (Module l : appModules) {
       Route r = l.route();
       if (r != null && r.router().equals("app") && r.kind().equals("layout")) {
         String d = dir(l.path());

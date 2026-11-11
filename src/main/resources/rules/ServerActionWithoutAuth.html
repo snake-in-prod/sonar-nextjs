@@ -5,8 +5,8 @@ that changes data (a database write, a POST, PUT, PATCH or DELETE <code>fetch</c
 signed in or not. An action that only revalidates refreshes the cache and changes no data.</p>
 <p>The rule follows the project helpers the action calls: a helper that calls <code>auth()</code>,
 <code>getServerSession</code>, <code>currentUser</code>, <code>getUser</code>, <code>getSession</code> or reads the
-session cookie counts as a check. Sign-in, sign-up, password, contact, newsletter and view counter actions are public
-by design and are left out, and so is an action calling a project helper the analysis cannot see. An app that never
+session cookie counts as a check. Sign-in, sign-up, password, contact, newsletter, guest cart, error monitoring and view
+counter actions are public by design and are left out, and so is an action calling a project helper the analysis cannot see. An app that never
 checks a session anywhere has no signed-in users: its actions are public by design and are left out too.</p>
 <h2>Why is this an issue?</h2>
 <p>Hiding the button from signed-out users, or protecting the page with middleware, does not protect the action: the

@@ -4,3 +4,7 @@ import { db } from './db';
 export async function purgeAll() {
   await db.post.deleteMany();
 }
+
+export async function addLine(variantId: string) {
+  await db.line.create({ data: { variantId } });
+}

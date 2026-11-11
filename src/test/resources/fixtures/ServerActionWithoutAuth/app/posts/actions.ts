@@ -10,6 +10,7 @@ import { loadContext, slugify } from '@/lib/session';
 import { ensureContext } from '@/lib/guards';
 import { mystery } from '@/lib/missing';
 import { purgeAll } from '@/lib/writer';
+import { unstable_update } from '@/auth';
 
 export async function deletePost(id: string) { // Noncompliant {{Check the session in "deletePost"}}
   await db.post.delete({ where: { id } });
@@ -90,6 +91,33 @@ export async function likePost(id: string) {
 // compliant: public by design
 export async function subscribeToNewsletter(email: string) {
   await db.subscriber.create({ data: { email } });
+}
+
+// compliant: a transaction that only reads
+export async function countPosts() {
+  return db.$transaction(async (tx) => {
+    const n = await tx.post.count();
+    return { n, last: await tx.post.findFirst() };
+  });
+}
+
+export async function archivePosts(ids: string[]) { // Noncompliant
+  await db.$transaction(async (tx) => {
+    await tx.post.updateMany({ where: { id: { in: ids } }, data: { archived: true } });
+  });
+}
+
+// compliant: a getter that refreshes the cache after reading
+export async function getPostsFresh() {
+  const rows = await db.post.findMany();
+  revalidatePath('/posts');
+  return rows;
+}
+
+// compliant: updates the caller's own session
+export async function updateAvatar(url: string) {
+  await unstable_update({ user: { image: url } });
+  revalidatePath('/');
 }
 
 // compliant: not exported, not an endpoint

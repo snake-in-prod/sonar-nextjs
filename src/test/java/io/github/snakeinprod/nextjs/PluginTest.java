@@ -71,7 +71,10 @@ class PluginTest {
       assertThat(js).contains("window.registerExtension('" + key + "'");
       // SonarQube places extension pages in a two-column grid
       assertThat(js).contains("options.el.style.gridColumn = '1 / -1'", "options.el.style.width = '100%'")
-        .doesNotContain("container-type", "innerHTML", "eval(");
+        .doesNotContain("container-type", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(");
+      // charts are inline SVG built node by node, on the branch or pull request being viewed
+      assertThat(js).contains("createElementNS", "options.branchLike", "nx_routes_json", "api/' + path", "'measures/component'",
+        "'issues/search'", "'qualitygates/project_status'", "'nextjs-js'", "'nextjs-ts'", "aria-label");
       assertThat(js.chars().filter(c -> c == '{').count()).isEqualTo(js.chars().filter(c -> c == '}').count());
       assertThat(js.chars().filter(c -> c == '(').count()).isEqualTo(js.chars().filter(c -> c == ')').count());
     }

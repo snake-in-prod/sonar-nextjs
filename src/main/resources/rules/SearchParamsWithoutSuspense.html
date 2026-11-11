@@ -9,8 +9,11 @@ the server HTML is empty and the build fails with "useSearchParams() should be w
 Suspense, when a <code>loading</code> file wraps the page or the layout, when the component is loaded with
 <code>next/dynamic</code>, and when the page is dynamic: a dynamic segment without <code>generateStaticParams</code>,
 <code>cookies()</code>, <code>headers()</code>, a session helper, <code>searchParams</code>,
-<code>dynamic = 'force-dynamic'</code>, <code>no-store</code> or <code>revalidate = 0</code> in the page, its
-layouts or the server modules they import.</p>
+<code>dynamic = 'force-dynamic'</code>, <code>no-store</code>, <code>revalidate = 0</code>, or a next-intl/server
+call without <code>setRequestLocale</code> in the page, its layouts or the server modules they import. The rendered
+component must be one that calls the hook (directly, or through a component or custom hook of its module), not just
+any export of that module. An app whose next.config sets <code>missingSuspenseWithCSRBailout: false</code> chose
+client rendering and gets no issue.</p>
 <h2>How to fix it</h2>
 <p>Wrap the component that reads the search parameters in <code>&lt;Suspense&gt;</code> with a fallback, as close to
 it as possible, so the rest of the page is still rendered on the server. Or read <code>searchParams</code> in the page

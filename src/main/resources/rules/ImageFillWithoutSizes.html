@@ -4,7 +4,11 @@
 <code>sizes</code> the browser assumes the image is as wide as the viewport (100vw) and downloads the largest candidate
 of the srcset, even for a thumbnail in a grid: slower pages and wasted bandwidth, mostly on mobile.</p>
 <p>The rule stays silent when it cannot see all the props: a spread such as <code>{...props}</code>, or a computed
-<code>fill={value}</code>.</p>
+<code>fill={value}</code>. It is silent too when the image has no srcset to size (<code>unoptimized</code>, an
+<code>images.unoptimized</code> next.config, or an SVG source, literal, imported or held by a constant), and when the
+image is full width: walking out through the enclosing elements, one with a viewport height or width
+(<code>h-screen</code>, <code>h-[100vh]</code>, <code>w-screen</code>) comes before any width limit
+(<code>w-64</code>, <code>max-w-md</code>, <code>size-8</code>, <code>grid-cols-2</code>).</p>
 <h2>How to fix it</h2>
 <p>Set <code>sizes</code> to the width the image takes at each breakpoint.</p>
 <h3>Noncompliant code example</h3>

@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,7 +31,10 @@ import java.util.Set;
  * brings its own boundary) and barrels. A loading file wraps the page of its segment and every segment below it, but not
  * the layout of its own segment. A page is static when its route has no dynamic segment (or exports
  * generateStaticParams), and neither it, its layouts nor the server modules they import call cookies(), headers(), a
- * session helper, read searchParams, or opt out with force-dynamic, no-store or revalidate 0.
+ * session helper, read searchParams, call next-intl/server without setRequestLocale, or opt out with force-dynamic,
+ * no-store or revalidate 0. The last step into the calling module counts only when a rendered export calls the hook
+ * (itself or through a component of its module). Silent in an app whose next.config sets
+ * missingSuspenseWithCSRBailout to false: client rendering is chosen there.
  */
 public class SearchParamsWithoutSuspense implements NextRule {
 
@@ -40,8 +43,9 @@ public class SearchParamsWithoutSuspense implements NextRule {
   private static final Set<String> DYNAMIC_STRINGS = Set.of("force-dynamic", "no-store", "force-no-store");
 
   private Map<Module, Boolean> dynamicCache;
-  private Map<Module, Set<Module>> rendersCache;
+  private Map<Module, Map<Module, Set<String>>> rendersCache;
   private Map<Module, Optional<String>> staticCache;
+  private final Map<String, Boolean> optedOut = new HashMap<>();
 
   @Override
   public void check(RuleContext ctx) {
@@ -50,7 +54,7 @@ public class SearchParamsWithoutSuspense implements NextRule {
       return;
     }
     List<Token> calls = hookCalls(m);
-    if (calls.isEmpty()) {
+    if (calls.isEmpty() || optedOut(ctx.model(), m)) {
       return;
     }
     if (dynamicCache == null) {
@@ -60,13 +64,14 @@ public class SearchParamsWithoutSuspense implements NextRule {
     }
     NextModel model = ctx.model();
     String page = null;
+    Set<String> names = hookExports(m, calls);
     for (Module entry : model.modules()) {
       Route r = entry.route();
       if (r == null || !r.router().equals("app") || !(r.kind().equals("page") || r.kind().equals("layout"))) {
         continue;
       }
       Optional<String> staticPage = staticCache.computeIfAbsent(entry, e -> Optional.ofNullable(staticPageAround(model, e)));
-      if (staticPage.isPresent() && rendersWithoutSuspense(model, entry, m)) {
+      if (staticPage.isPresent() && rendersWithoutSuspense(model, entry, m, names)) {
         page = staticPage.get();
         break;
       }
@@ -166,6 +171,12 @@ public class SearchParamsWithoutSuspense implements NextRule {
 
   /** The module calls a dynamic API or a session helper, reads searchParams, or opts out of static rendering. */
   private static boolean dynamic(Module m) {
+    // next-intl/server reads the locale from the request headers unless this module set it
+    boolean intl = m.imports().stream().anyMatch(i -> i.spec().equals("next-intl/server")
+      && i.names().values().stream().anyMatch(n -> !n.endsWith("etRequestLocale")));
+    if (intl && m.file().tokens().stream().noneMatch(t -> t.isIdent("setRequestLocale") || t.isIdent("unstable_setRequestLocale"))) {
+      return true;
+    }
     for (Chain c : m.file().chains()) {
       if (DYNAMIC_CALLS.contains(c.firstName()) && c.callAfter(0) != null && !c.precededBy(".")) {
         return true;
@@ -185,8 +196,14 @@ public class SearchParamsWithoutSuspense implements NextRule {
     return false;
   }
 
-  /** {@code from} renders {@code to}, directly or through other components, with no Suspense on the way. */
-  private boolean rendersWithoutSuspense(NextModel model, Module from, Module to) {
+  /**
+   * {@code from} renders {@code to}, directly or through other components, with no Suspense on the way; the last step
+   * renders one of {@code names} (null: any name).
+   */
+  private boolean rendersWithoutSuspense(NextModel model, Module from, Module to, Set<String> names) {
+    if (from == to) {
+      return !mentionsSuspense(to);
+    }
     Set<Module> seen = new HashSet<>();
     Deque<Module> queue = new ArrayDeque<>(List.of(from));
     while (!queue.isEmpty()) {
@@ -194,16 +211,72 @@ public class SearchParamsWithoutSuspense implements NextRule {
       if (!seen.add(a) || mentionsSuspense(a)) {
         continue;
       }
-      if (a == to) {
-        return true;
+      for (Map.Entry<Module, Set<String>> e : rendersCache.computeIfAbsent(a, x -> renders(model, x)).entrySet()) {
+        if (e.getKey() != to) {
+          queue.add(e.getKey());
+        } else if (!mentionsSuspense(to) && (names == null || e.getValue().stream().anyMatch(names::contains))) {
+          return true;
+        }
       }
-      queue.addAll(rendersCache.computeIfAbsent(a, x -> renders(model, x)));
     }
     return false;
   }
 
-  /** The project modules whose imported names this module renders as JSX tags. Static imports only. */
-  private static Set<Module> renders(NextModel model, Module m) {
+  /**
+   * The exported names whose function calls the hook, itself or through a top-level function of its module that does
+   * (a component it renders, a custom hook); null when a call sits outside the top-level functions (a class, a memo or
+   * forwardRef wrapper).
+   */
+  private static Set<String> hookExports(Module m, List<Token> calls) {
+    Map<String, List<Token>> bodies = new HashMap<>();
+    m.functions().forEach((name, fn) -> bodies.put(name, Nodes.tokens(fn.body())));
+    Set<String> calling = new HashSet<>();
+    for (Token call : calls) {
+      String in = bodies.entrySet().stream().filter(e -> e.getValue().contains(call)).map(Map.Entry::getKey).findFirst().orElse(null);
+      if (in == null) {
+        return null;
+      }
+      calling.add(in);
+    }
+    boolean grew = true;
+    while (grew) {
+      grew = false;
+      for (Map.Entry<String, List<Token>> e : bodies.entrySet()) {
+        List<Token> t = e.getValue();
+        // a function naming one that calls the hook (renders it, or calls it as a custom hook) calls it too
+        if (!calling.contains(e.getKey()) && t.stream().anyMatch(x -> x.kind() == TokenKind.IDENT && calling.contains(x.text()))) {
+          grew = calling.add(e.getKey());
+        }
+      }
+    }
+    Set<String> out = new HashSet<>();
+    m.exports().forEach((exported, local) -> {
+      if (calling.contains(local.text()) || exported.equals("default") && calling.contains("default")) {
+        out.add(exported);
+      }
+    });
+    return out;
+  }
+
+  /** The app's next.config sets missingSuspenseWithCSRBailout to false. */
+  private boolean optedOut(NextModel model, Module m) {
+    NextModel.NextApp app = model.appOf(m.path());
+    return app != null && optedOut.computeIfAbsent(app.dir(), dir -> {
+      for (String ext : List.of("js", "mjs", "cjs", "ts", "mts")) {
+        Module c = model.module(dir + "next.config." + ext);
+        List<Token> t = c == null ? List.of() : c.file().tokens();
+        for (int i = 0; i + 2 < t.size(); i++) {
+          if (t.get(i).isIdent("missingSuspenseWithCSRBailout") && t.get(i + 1).is(":") && t.get(i + 2).isIdent("false")) {
+            return true;
+          }
+        }
+      }
+      return false;
+    });
+  }
+
+  /** The project modules whose imported names this module renders as JSX tags, with those names. Static imports only. */
+  private static Map<Module, Set<String>> renders(NextModel model, Module m) {
     Set<String> tags = new HashSet<>();
     Nodes.groups(m.file().root(), g -> {
       List<Node> kids = g.children();
@@ -214,12 +287,16 @@ public class SearchParamsWithoutSuspense implements NextRule {
         }
       }
     });
-    Set<Module> out = new LinkedHashSet<>();
+    Map<Module, Set<String>> out = new LinkedHashMap<>();
     for (Import i : m.imports()) {
       Module t = i.typeOnly() || i.dynamic() || i.reExport() ? null : model.target(i);
       // ponytail: barrels (a target that only re-exports) are not followed, the walk stays silent past them
-      if (t != null && i.names().entrySet().stream().anyMatch(e -> !e.getValue().equals("*") && tags.contains(e.getKey()))) {
-        out.add(t);
+      if (t != null) {
+        i.names().forEach((local, imported) -> {
+          if (!imported.equals("*") && tags.contains(local)) {
+            out.computeIfAbsent(t, x -> new HashSet<>()).add(imported);
+          }
+        });
       }
     }
     return out;

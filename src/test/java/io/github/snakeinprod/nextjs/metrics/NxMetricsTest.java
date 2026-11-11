@@ -25,16 +25,15 @@ class NxMetricsTest {
     Analyzer analyzer = Analyzer.all(model);
     Map<String, Integer> totals = new HashMap<>();
     for (Module m : model.modules()) {
-      // the rules are stubs for now: no issues anywhere
       List<Analyzer.Issue> issues = analyzer.analyze(m);
-      assertThat(issues).isEmpty();
       for (Map.Entry<Metric<Integer>, Integer> e : NxMetrics.fileValues(m, issues).entrySet()) {
         totals.merge(e.getKey().getKey(), e.getValue(), Integer::sum);
       }
     }
+    // unprotected: save and remove of src/actions/save.ts, POST of /api/users
     // pages /, /blog/[slug], /docs/[[...path]], /inline, route /api/users, Pages Router /about and /api/hello
     assertThat(totals).containsEntry("nx_routes", 7).containsEntry("nx_dynamic_routes", 2).containsEntry("nx_server_actions", 3)
-      .containsEntry("nx_client_modules", 2).containsEntry("nx_shared_modules", 3).containsEntry("nx_unprotected_endpoints", 0);
+      .containsEntry("nx_client_modules", 2).containsEntry("nx_shared_modules", 3).containsEntry("nx_unprotected_endpoints", 3);
     assertThat(totals.get("nx_client_modules") + totals.get("nx_server_modules") + totals.get("nx_shared_modules"))
       .isEqualTo(model.modules().size());
     assertThat(NxAggregator.ratio(2, 19)).isEqualTo(10.5);

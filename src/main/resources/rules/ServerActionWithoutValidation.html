@@ -1,0 +1,30 @@
+<p>The arguments of a Server Action, <code>FormData</code> included, come from the client as they are: TypeScript types
+are not checked at run time. Passing one of them, or a value built from one, to a database call or as the whole target
+of <code>redirect()</code> without a schema parse (zod, valibot, yup, arktype <code>.parse</code> /
+<code>.safeParse</code>) or explicit checks lets a caller send any shape or value.</p>
+<h2>Why is this an issue?</h2>
+<p>A caller can add fields the form never had (<code>role: 'admin'</code> through
+<code>Object.fromEntries(formData)</code>), send an object where a string was expected (NoSQL operators such as
+<code>{ $ne: null }</code>), an over-long value, or a redirect to another site. The rule stays silent when the action
+calls a validation function or tests an input in a condition, a comparison, <code>typeof</code> or an allow-list.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+'use server';
+export async function updateProfile(formData: FormData) {
+  await db.user.update({ where: { id }, data: Object.fromEntries(formData) }); // Noncompliant
+}
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+'use server';
+const Profile = z.object({ name: z.string().max(100), bio: z.string().max(1000) });
+
+export async function updateProfile(formData: FormData) {
+  const data = Profile.parse(Object.fromEntries(formData));
+  await db.user.update({ where: { id }, data });
+}
+</pre>
+<h2>Resources</h2>
+<ul>
+  <li>Next.js documentation: Forms and Server Actions, server-side form validation</li>
+</ul>

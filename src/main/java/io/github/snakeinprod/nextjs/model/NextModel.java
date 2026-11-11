@@ -35,12 +35,16 @@ public final class NextModel {
   private static final Pattern MAJOR = Pattern.compile("(\\d+)\\.");
   private static final Set<String> APP_CONVENTIONS = Set.of("page", "layout", "route", "loading", "error", "global-error",
     "not-found", "template", "default");
-  /** Tests, mocks, stories and end-to-end files: no role, no route, not measured, no issues. */
-  private static final Pattern TEST = Pattern.compile("(^|/)(__tests__|__mocks__|e2e|playwright)/|\\.(test|spec|stories)\\.[^/]*$");
-  private static final Pattern TEST_FILE = Pattern.compile("(^|/)(__tests__|__mocks__)/|\\.(test|spec|stories)\\.[^/]*$");
-  /** A convention file under app/ or pages/ in an e2e or playwright folder is a real route ({@code app/e2e/warmup/page.tsx}). */
-  private static final Pattern E2E_ROUTE = Pattern.compile("(^|/)(app/(.+/)?(e2e|playwright)/(.+/)?(" + String.join("|", APP_CONVENTIONS)
-    + ")|pages/(.+/)?(e2e|playwright)/.+)\\.(js|jsx|ts|tsx)$");
+  /** Tests, mocks, stories, end-to-end files and test fixtures: no role, no route, not measured, no issues. */
+  private static final Pattern TEST = Pattern.compile(
+    "(^|/)(__tests__|__mocks__|__fixtures__|e2e|playwright|fixtures|testdata)/|\\.(test|spec|stories)\\.[^/]*$");
+  private static final Pattern TEST_FILE = Pattern.compile("(^|/)(__tests__|__mocks__|__fixtures__)/|\\.(test|spec|stories)\\.[^/]*$");
+  /**
+   * A convention file under app/ or pages/ in an e2e, playwright, fixtures or testdata folder is a real route
+   * ({@code app/e2e/warmup/page.tsx}).
+   */
+  private static final Pattern E2E_ROUTE = Pattern.compile("(^|/)(app/(.+/)?(e2e|playwright|fixtures|testdata)/(.+/)?("
+    + String.join("|", APP_CONVENTIONS) + ")|pages/(.+/)?(e2e|playwright|fixtures|testdata)/.+)\\.(js|jsx|ts|tsx)$");
   private static final Pattern CONVENTION_FILE = Pattern.compile("([^/.]+)\\.(js|jsx|ts|tsx)");
 
   private final Map<String, Module> modules;

@@ -2,6 +2,7 @@ package io.github.snakeinprod.nextjs.rules;
 
 import io.github.snakeinprod.nextjs.model.EnvRead;
 import io.github.snakeinprod.nextjs.model.Role;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -22,8 +23,10 @@ public class SecretInPublicEnv implements NextRule {
   @Override
   public void check(RuleContext ctx) {
     boolean server = ctx.module().role() == Role.SERVER;
+    Set<String> reported = new HashSet<>();
     for (EnvRead e : ctx.module().envReads()) {
-      if (!isSecret(e.name())) {
+      // one issue per variable and module: the rename fixes every read
+      if (!isSecret(e.name()) || !reported.add(e.name())) {
         continue;
       }
       // server code keeps the value out of the browser, but the name invites client code to read it

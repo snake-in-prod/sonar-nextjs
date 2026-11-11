@@ -51,7 +51,7 @@ The lexer never throws; a broken file still gives a tree.
 | `functionsWithDirective("use server")` | functions, nested ones too, whose body starts with that directive ("use cache" too) |
 | `serverActions()` | exported functions of a "use server" module, exported action library values (`builder()`, see below), exported values built by a wrapper (`wrapper()`, see below), and inline "use server" functions (`inline()`) |
 | `builder(name)` | the action library chain a top-level `const name = ...` holds, or null |
-| `isTest()` | a test, mock, story or end-to-end file, see Test files |
+| `isTest()` | a test, mock, story, end-to-end or test fixture file, see Test files |
 | `envReads()` | `process.env.X` and `process.env["X"]`: the name and its token |
 | `route()` | the Next.js convention, or null |
 | `inAppDir()` | under app/ or src/app/ of a Next.js package |
@@ -106,7 +106,9 @@ and interception markers `(.)` removed, private folders `_x` left out, `dynamic`
 `action`, `stateAction` or `handler` step. ServerActionWithoutAuth follows the client through the module graph
 (`lib/safe-action.ts`): a `.use(...)` middleware or a procedure handler that checks the session, given inline or by
 name, makes every action built on it authenticated. ServerActionWithoutValidation treats only `clientInput`,
-`bindArgsClientInputs`, and `parsedInput` / `input` without a schema step, as raw input.
+`bindArgsClientInputs`, and `parsedInput` / `input` without a schema step, as raw input. It reports each input once per action, at
+its first use reaching a sink; a value built from an input (`const p = { id: data.id, ...data }`) is that input, one
+field read from it (`formData.get('name')`) an input of its own.
 
 ### Wrapped actions
 
@@ -124,9 +126,10 @@ action the model sees.
 
 ### Test files
 
-`*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `e2e/` or `playwright/` (except
-App Router convention files under app/ and Pages Router files under pages/ in such a folder: `app/e2e/x/page.tsx` is
-a real route) are read
+`*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `__fixtures__/`, `e2e/`,
+`playwright/`, `fixtures/` (`tests/fixtures/`, `test/fixtures/`) or `testdata/` (except App Router convention files
+under app/ and Pages Router files under pages/ in an e2e, playwright, fixtures or testdata folder: `app/e2e/x/page.tsx`
+is a real route) are read
 (`isTest()`) but get no route and no role (SHARED, never entered from a client or server module), count in no nx_*
 measure nor in nx_routes_json, and `Analyzer` reports nothing in them.
 

@@ -156,9 +156,16 @@ class NextModelTest {
       "lib/db.spec.ts", "'use server';\nexport async function act(x) { await db.post.delete({ where: { id: x } }); }",
       "e2e/home.ts", "import P from '../app/page';",
       "tests/playwright/login.ts", "export const a = 1;"));
+    files.putAll(Map.of(
+      "tests/fixtures/app/api/route.ts", "export async function POST() { await db.item.deleteMany(); }",
+      "test/fixtures/lib/env.ts", "export const k = process.env.NEXT_PUBLIC_API_SECRET;",
+      "src/__fixtures__/actions.ts", "'use server';\nexport async function act(x) { await db.post.delete({ where: { id: x } }); }",
+      "fixtures/pages/index.tsx", page,
+      "pkg/testdata/app/page.tsx", page));
     NextModel m = NextModel.build(TestProjects.of(files));
     for (String p : List.of("app/__tests__/page.tsx", "app/page.test.tsx", "pages/__mocks__/user.ts", "components/Button.stories.tsx",
-      "lib/db.spec.ts", "e2e/home.ts", "tests/playwright/login.ts")) {
+      "lib/db.spec.ts", "e2e/home.ts", "tests/playwright/login.ts", "tests/fixtures/app/api/route.ts", "test/fixtures/lib/env.ts",
+      "src/__fixtures__/actions.ts", "fixtures/pages/index.tsx", "pkg/testdata/app/page.tsx")) {
       Module t = m.module(p);
       assertThat(t.isTest()).as(p).isTrue();
       assertThat(t.role()).as(p).isEqualTo(Role.SHARED);
@@ -183,7 +190,9 @@ class NextModelTest {
       "app/e2e/warmup/helpers.ts", "export const a = 1;",
       "app/e2e/warmup/page.spec.tsx", page,
       "pages/playwright/login.tsx", page,
+      "app/fixtures/page.tsx", page,
       "e2e/app/page.tsx", page)));
+    assertThat(m.module("app/fixtures/page.tsx").route().url()).isEqualTo("/fixtures");
     assertThat(m.module("app/e2e/warmup/page.tsx").isTest()).isFalse();
     assertThat(m.module("app/e2e/warmup/page.tsx").route().url()).isEqualTo("/e2e/warmup");
     assertThat(m.module("pages/playwright/login.tsx").route().url()).isEqualTo("/playwright/login");

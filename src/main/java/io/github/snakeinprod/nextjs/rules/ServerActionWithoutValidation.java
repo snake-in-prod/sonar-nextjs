@@ -8,8 +8,11 @@ import io.github.snakeinprod.nextjs.parse.Node;
 import io.github.snakeinprod.nextjs.parse.Nodes;
 import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -129,10 +132,16 @@ public class ServerActionWithoutValidation implements NextRule {
     }
     List<ServerActionWithoutAuth.Flow.Decl> decls = ServerActionWithoutAuth.Flow.decls(fn.body());
     Set<String> rows = new HashSet<>();
+    // a value built from an input is that input (const p = { id: data.id, ...data }); one field of it is an input of its own
+    Map<String, String> root = new HashMap<>();
+    inputs.forEach(n -> root.put(n, n));
     for (int pass = 0; pass < 4; pass++) {
       for (ServerActionWithoutAuth.Flow.Decl d : decls) {
-        if (!inputs.containsAll(d.names()) && !coerced(d.init()) && ServerActionWithoutAuth.Flow.mentions(d.init(), inputs) != null) {
+        Token from = coerced(d.init()) ? null : ServerActionWithoutAuth.Flow.mentions(d.init(), inputs);
+        if (!inputs.containsAll(d.names()) && from != null) {
           inputs.addAll(d.names());
+          boolean field = d.names().size() > 1 || oneField(d.init(), inputs);
+          d.names().forEach(n -> root.putIfAbsent(n, field ? n : root.get(from.text())));
           if (fromDb(m, d.init())) {
             rows.addAll(d.names());
           }
@@ -144,22 +153,53 @@ public class ServerActionWithoutValidation implements NextRule {
     }
     // a check on rows read with an input silences the action, but the rows themselves are not reported
     inputs.removeAll(rows);
-    Set<Token> reported = new HashSet<>();
-    for (Chain c : chains) {
+    // each input once per action, at its first use reaching a sink; a later sink reports the next input it uses
+    Set<String> open = new HashSet<>(root.values());
+    List<Chain> inOrder = chains.stream().sorted(Comparator.comparingInt((Chain c) -> c.first().line())
+      .thenComparingInt(c -> c.first().column())).toList();
+    for (Chain c : inOrder) {
+      Set<String> live = new HashSet<>(inputs);
+      live.removeIf(n -> !open.contains(root.get(n)));
       if (flow.isDbCall(m, c) && !inMemory(c) && !AUTH_CALLS.contains(c.firstName())) {
         List<Node> kids = c.container().children();
-        Token t = firstInput(kids.subList(c.from() + 1, c.to() < kids.size() && isTemplate(kids.get(c.to())) ? c.to() + 1 : c.to()), inputs);
-        if (t != null && reported.add(t)) {
+        Token t = firstInput(kids.subList(c.from() + 1, c.to() < kids.size() && isTemplate(kids.get(c.to())) ? c.to() + 1 : c.to()), live);
+        if (t != null) {
+          open.remove(root.get(inputName(t, live)));
           ctx.report(t, "Validate \"" + t.text() + "\" with a schema (zod, valibot...) or explicit checks before passing it to the database.");
         }
       } else if ((c.path().equals("redirect") || c.path().equals("permanentRedirect")) && c.segments().size() == 2 && c.endsWithCall()) {
         List<List<Node>> args = c.callAfter(0).items();
-        Token t = args.isEmpty() ? null : wholeInput(args.get(0), inputs);
+        Token t = args.isEmpty() ? null : wholeInput(args.get(0), live);
         if (t != null) {
+          open.remove(root.get(t.text()));
           ctx.report(t, "Validate \"" + t.text() + "\" against an allow-list or explicit checks before redirecting to it.");
         }
       }
     }
+  }
+
+  /** The init reads one member of one input: {@code formData.get('name')}, {@code String(data.title)}. */
+  private static boolean oneField(List<Node> init, Set<String> inputs) {
+    List<Token> t = Nodes.tokens(init);
+    int uses = 0;
+    boolean member = false;
+    for (int i = 0; i < t.size(); i++) {
+      Token x = t.get(i);
+      if (x.kind() == TokenKind.IDENT && inputs.contains(x.text()) && (i == 0 || !t.get(i - 1).is(".") && !t.get(i - 1).is("?."))) {
+        uses++;
+        member = i + 1 < t.size() && (t.get(i + 1).is(".") || t.get(i + 1).is("?.") || t.get(i + 1).is("["));
+      }
+    }
+    return uses == 1 && member;
+  }
+
+  /** The input a reported token stands for: the identifier, or the first input a template literal interpolates. */
+  private static String inputName(Token t, Set<String> inputs) {
+    if (t.kind() == TokenKind.STRING) {
+      return inputs.stream().sorted().filter(n -> Pattern.compile("\\$\\{[^}]*\\b" + Pattern.quote(n) + "\\b").matcher(t.text()).find())
+        .findFirst().orElse(t.text());
+    }
+    return t.text();
   }
 
   /** {@code await db.post.findMany(...)}, {@code rows.filter(...)}: a value read from the database, not from the client. */

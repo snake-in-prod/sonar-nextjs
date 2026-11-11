@@ -8,6 +8,7 @@ import { env } from '../lib/env';
 export default function Client({ items }: { items: unknown }) {
   const a = process.env.API_URL; // Noncompliant {{process.env.API_URL is undefined in the browser}}
   const b = process.env['STRIPE_KEY']; // Noncompliant {{STRIPE_KEY}}
+  const b2 = process.env.API_URL || b; // a second read of the same variable
   if (process.env.DEBUG && process.env.VERBOSE) { // Noncompliant 2
     console.log(items);
   }
@@ -21,5 +22,5 @@ export default function Client({ items }: { items: unknown }) {
   const i = process.env.NEXT_PUBLIC_LOG_LEVEL ?? process.env.LOG_LEVEL;
   const j = Boolean(process.env.PRICE_ID || process.env.NEXT_PUBLIC_PRICE_ID);
   track();
-  return <p>{a}{b}{c}{d}{e}{f}{g}{h}{i}{j}{shared}{baseUrl}{env.NEXT_PUBLIC_X}</p>;
+  return <p>{a}{b}{b2}{c}{d}{e}{f}{g}{h}{i}{j}{shared}{baseUrl}{env.NEXT_PUBLIC_X}</p>;
 }

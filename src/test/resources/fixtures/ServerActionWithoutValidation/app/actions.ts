@@ -18,6 +18,28 @@ export async function removePost(id: string) {
   await db.post.delete({ where: { id } }); // Noncompliant
 }
 
+// each input once per action, at its first use; different inputs apart
+export async function removeProject(id: string, ownerId: string) {
+  await db.task.deleteMany({ where: { projectId: id } }); // Noncompliant
+  await db.member.deleteMany({ where: { projectId: id } });
+  await db.project.delete({ where: { id, ownerId } }); // Noncompliant {{Validate "ownerId"}}
+  await db.log.create({ data: { text: `removed ${id}` } });
+}
+
+export async function saveContact(formData: FormData) {
+  const name = formData.get('name');
+  const email = formData.get('email');
+  await db.contact.create({ data: { name } }); // Noncompliant {{Validate "name"}}
+  await db.contact.update({ where: { email }, data: { name } }); // Noncompliant {{Validate "email"}}
+}
+
+// a value built from an input is that input
+export async function saveDraft(data: Draft) {
+  const draft = { title: data.title, body: data.body };
+  await db.draft.update({ where: { id: 1 }, data }); // Noncompliant
+  await db.history.create({ data: draft });
+}
+
 export async function importPost(formData: FormData) {
   const data = Object.fromEntries(formData);
   await db.post.create({ data }); // Noncompliant

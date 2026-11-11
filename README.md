@@ -34,7 +34,7 @@ extend "Next.js".
 | ServerEnvInClient | Bug | Major | yes |
 | ServerActionWithoutAuth | Vulnerability | Critical | yes |
 | ServerActionWithoutValidation | Vulnerability | Major | yes |
-| RouteHandlerWithoutAuth | Vulnerability | Major | no |
+| RouteHandlerWithoutAuth | Vulnerability | Major | yes |
 | PersonalizedCachedFetch | Vulnerability | Critical | yes |
 | OpenRedirect | Vulnerability | Major | yes |
 | UnsafeHtmlFromInput | Vulnerability | Critical | yes |
@@ -51,7 +51,8 @@ nx_routes, nx_client_modules, nx_server_modules, nx_shared_modules, nx_client_ra
 nx_unprotected_endpoints, nx_dynamic_routes, and nx_routes_json and nx_app_json for the project page "Next.js": the
 route tree with a dot per route coloured by its issues and the client modules each pulls in, the client/server split,
 issues by rule and the Server Actions. Server Actions built with next-safe-action, zsa or a project wrapper
-(`withAuth(async (...) => ...)`) count; test, mock, story and end-to-end files are left out.
+(`withAuth(async (...) => ...)`) count; test, mock, story, end-to-end and
+test fixture files are left out.
 On a pull request the page shows the whole app's numbers (nx_app_json).
 
 ![The Next.js project page](docs/images/nextjs-page.png)

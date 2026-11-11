@@ -22,4 +22,6 @@ export const config = {
   s: process.env.NEXT_PUBLIC_DISABLE_EMAIL_PASSWORD_SIGNUP,
   // not public at all
   r: process.env.STRIPE_SECRET_KEY,
+  // one issue per variable: the rename fixes every read
+  t: process.env.NEXT_PUBLIC_API_SECRET,
 };

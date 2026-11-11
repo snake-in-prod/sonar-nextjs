@@ -37,7 +37,11 @@ public class ServerEnvInClient implements NextRule {
     if (m.role() != Role.CLIENT || !m.has(Directive.USE_CLIENT) && m.reachedFromServer() || appDir(ctx.model(), m) == null) {
       return;
     }
+    Set<String> reported = new HashSet<>();
     for (EnvRead e : serverReads(ctx.model(), m, configEnv)) {
+      if (!reported.add(e.name())) {
+        continue;
+      }
       ctx.report(e.token(), "process.env." + e.name() + " is undefined in the browser: read it on the server and pass the value"
         + " down, or rename it NEXT_PUBLIC_" + e.name() + " if it is not a secret.");
     }

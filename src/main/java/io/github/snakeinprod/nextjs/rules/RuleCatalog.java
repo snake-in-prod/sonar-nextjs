@@ -58,7 +58,7 @@ public final class RuleCatalog {
     spec("ServerActionWithoutValidation", Type.VULNERABILITY, "MAJOR", true, "Server Action inputs should be validated before use",
       "Server Action arguments and FormData come from the client unchecked. Passing them to a database call or a redirect without a schema parse (zod, valibot, yup, arktype) or explicit checks lets a caller send any shape or value.",
       "'use server';\nexport async function save(formData) {\n  await db.user.update({ data: { role: formData.get('role') } }); // Noncompliant\n}", ServerActionWithoutValidation::new),
-    spec("RouteHandlerWithoutAuth", Type.VULNERABILITY, "MAJOR", false, "Route handlers that change data should check the caller",
+    spec("RouteHandlerWithoutAuth", Type.VULNERABILITY, "MAJOR", true, "Route handlers that change data should check the caller",
       "An app/**/route.(ts|js) exporting POST, PUT, PATCH or DELETE with no session or token check lets anyone change data.",
       "export async function DELETE(req) { // Noncompliant\n  await db.item.deleteMany();\n}", RouteHandlerWithoutAuth::new),
     spec("PersonalizedCachedFetch", Type.VULNERABILITY, "CRITICAL", true, "Cached data should not depend on the user",

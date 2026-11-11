@@ -1,8 +1,9 @@
 <p>A <code>redirect()</code>, <code>permanentRedirect()</code> (next/navigation), <code>NextResponse.redirect()</code>
 (next/server) or <code>Response.redirect()</code>, a <code>router.push()</code> or <code>router.replace()</code> of
-<code>useRouter()</code> (next/navigation, next/router), or a <code>window.location.href</code> assignment or
-<code>window.location.assign()</code> / <code>replace()</code> whose target is taken from <code>searchParams</code>, <code>params</code> or form data, with no allow-list
-or same-origin check.</p>
+<code>useRouter()</code> (next/navigation, next/router) or of the next/router <code>Router</code>, or a
+<code>window.location.href</code> assignment or <code>window.location.assign()</code> / <code>replace()</code> whose
+target is taken from <code>searchParams</code>, <code>params</code>, form data or the Pages Router <code>query</code>
+(<code>router.query</code>, <code>req.query</code>), with no allow-list or same-origin check.</p>
 <h2>Why is this an issue?</h2>
 <p>An open redirect lets an attacker build a link on your trusted domain that sends the visitor to a site of their
 choice: <code>https://your.app/login?next=https://evil.example</code>. It is used for phishing, and to steal tokens

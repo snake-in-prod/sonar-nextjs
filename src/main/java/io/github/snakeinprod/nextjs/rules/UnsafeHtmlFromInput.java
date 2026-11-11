@@ -7,8 +7,8 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * {@code dangerouslySetInnerHTML={{ __html: value }}} where the value is searchParams, params, form data or a fetch
- * response as it is, or a template or concatenation holding one (see {@link ValueFlow.Direct}), and no sanitizer
+ * {@code dangerouslySetInnerHTML={{ __html: value }}} where the value is searchParams, params, form data, the Pages
+ * Router query or a fetch response as it is, or a template or concatenation holding one (see {@link ValueFlow.Direct}), and no sanitizer
  * (DOMPurify, sanitize-html, xss, an escape or sanitize helper) is applied to it elsewhere in the function. Any other
  * transformation (a helper, JSON.stringify, a markdown renderer, React state) is not followed.
  */

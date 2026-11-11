@@ -14,7 +14,8 @@ import java.util.regex.Pattern;
 
 /**
  * redirect(), permanentRedirect() (next/navigation), NextResponse.redirect() (next/server), Response.redirect(),
- * push() and replace() of a router from useRouter() (next/navigation, next/router: an absolute URL leaves the app),
+ * push() and replace() of a router from useRouter() (next/navigation, next/router) or of the next/router singleton (an
+ * absolute URL leaves the app),
  * {@code window.location.href = ...} and {@code window.location.assign()} / {@code replace()} whose target is a value
  * from searchParams, params or form data as it is (see {@link ValueFlow.Direct}), also held in React state
  * ({@code setNext(searchParams.get('next'))}), with no check of that value before the redirect in the function:
@@ -38,6 +39,8 @@ public class OpenRedirect implements NextRule {
     Set<String> useRouter = ValueFlow.imported(m, "next/navigation", Set.of("useRouter"));
     useRouter.addAll(ValueFlow.imported(m, "next/router", Set.of("useRouter")));
     Set<String> routers = routers(ctx.file().tokens(), useRouter);
+    // import Router from 'next/router': the singleton router
+    routers.addAll(ValueFlow.imported(m, "next/router", Set.of("default")));
     List<List<Node>> targets = new ArrayList<>();
     List<Node.Group> ranges = new ArrayList<>();
     for (Chain c : ctx.file().chains()) {

@@ -510,12 +510,12 @@ final class ValueFlow {
   // ---------------------------------------------------------------- request values
 
   /**
-   * An expression that is a value from the request as it is: searchParams, params or form data (or, for HTML, a fetch
-   * response), a variable holding one, through getters ({@code .get('x')}, {@code .json()}), fallbacks
-   * ({@code x ?? '/'}), casts, {@code await}, {@code String()}, {@code decodeURIComponent()} and {@code new URL()}. A
-   * template literal counts when its first interpolation starts it and is such a value (anywhere for HTML), a
-   * concatenation when its first operand is (any operand for HTML). Any other call or operator means the value was
-   * transformed: not followed.
+   * An expression that is a value from the request as it is: searchParams, params, form data or a Pages Router
+   * {@code query} property (or, for HTML, a fetch response), a variable holding one, through getters
+   * ({@code .get('x')}, {@code .json()}), fallbacks ({@code x ?? '/'}), casts, {@code await}, {@code String()},
+   * {@code decodeURIComponent()} and {@code new URL()}. A template literal counts when its first interpolation starts
+   * it and is such a value (anywhere for HTML), a concatenation when its first operand is (any operand for HTML). Any
+   * other call or operator means the value was transformed: not followed.
    */
   static final class Direct implements Source {
 
@@ -523,7 +523,7 @@ final class ValueFlow {
     static final Set<String> GETTERS = Set.of("get", "getAll", "json", "text", "formData", "useSearchParams", "useParams", "then",
       "fetch");
     static final Set<String> PASSTHROUGH = Set.of("toString", "trim", "toLowerCase", "toUpperCase", "valueOf", "at");
-    private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then");
+    private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then", "query");
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
     private static final Set<String> FORM_GETTERS = Set.of("get", "getAll");
 
@@ -655,6 +655,8 @@ final class ValueFlow {
         source |= ROOTS.contains(n) && (route && !(k == 0 && locals.contains(n)) || !n.equals("params"))
           && !(k == 0 && n.equals("formData") && (names.size() < 2 || !FORM_GETTERS.contains(names.get(1))));
       }
+      // the query of a Pages Router request or router: req.query.next, router.query.returnUrl
+      source |= names.size() > 1 && names.subList(1, names.size()).contains("query");
       source |= html && "fetch".equals(root);
       if (!source) {
         return null;

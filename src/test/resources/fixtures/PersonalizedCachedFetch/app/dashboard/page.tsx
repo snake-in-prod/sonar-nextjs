@@ -10,9 +10,10 @@ export default async function Dashboard() {
   const token = (await cookies()).get('token')?.value;
   const userId = session?.user?.id;
 
-  const orders = await fetch(`${API}/orders?user=${userId}`, { next: { revalidate: 60 } }); // Noncompliant {{Do not cache this fetch}}
-  const profile = await fetch(`${API}/me`, { headers: { Authorization: `Bearer ${token}` }, cache: 'force-cache' }); // Noncompliant
-  const prefs = await fetch(`${API}/prefs`, { // Noncompliant
+  // compliant: the Data Cache keys a fetch on its URL, headers and body, so each user gets an entry of their own
+  const orders = await fetch(`${API}/orders?user=${userId}`, { next: { revalidate: 60 } });
+  const profile = await fetch(`${API}/me`, { headers: { Authorization: `Bearer ${token}` }, cache: 'force-cache' });
+  const prefs = await fetch(`${API}/prefs`, {
     method: 'POST',
     body: JSON.stringify({ userId }),
     next: { revalidate: false },

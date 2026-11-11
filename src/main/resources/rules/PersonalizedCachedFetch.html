@@ -1,29 +1,25 @@
 <p>Data that depends on the user should not go into a shared cache. This rule reports:</p>
 <ul>
-  <li>a <code>fetch</code> with <code>cache: 'force-cache'</code> or <code>next: { revalidate }</code> (other than 0) whose
-    URL, headers or body use a value from <code>cookies()</code>, <code>headers()</code> or the session
-    (<code>auth()</code>, <code>getServerSession()</code>, <code>currentUser()</code>, <code>getSession()</code>,
-    <code>getUser()</code>);</li>
-  <li>an <code>unstable_cache</code> callback that reads cookies, headers or the session, or uses such a value from the
-    enclosing function without receiving it as an argument or listing it in the key parts;</li>
+  <li>an <code>unstable_cache</code> callback that reads cookies, headers or the session (<code>auth()</code>,
+    <code>getServerSession()</code>, <code>currentUser()</code>, <code>getSession()</code>, <code>getUser()</code>), or
+    uses such a value from the enclosing function without receiving it as an argument or listing it in the key parts;</li>
   <li>a <code>"use cache"</code> function or file that reads cookies, headers or the session.</li>
 </ul>
 <h2>Why is this an issue?</h2>
-<p>The Next.js Data Cache and <code>"use cache"</code> entries are shared by every request. A response fetched with one
-user's token or for one user's id is stored on the server, kept across deployments of the same build, and can be
-served to another user when the key does not tell them apart. <code>unstable_cache</code> keys only on its key parts
-and arguments, so a value captured from the enclosing function leaks one user's result to everyone. Reading cookies or
+<p><code>unstable_cache</code> and <code>"use cache"</code> entries are shared by every request. <code>unstable_cache</code>
+keys only on its key parts and arguments, so a value captured from the enclosing function (a client built with the
+user's token, the user's id) leaks the first user's result to everyone who asks for the same key. Reading cookies or
 headers inside a cached scope fails at build or render time, or caches the first visitor's data.</p>
-<p>The rule follows values through variables of the same function. It stays silent on options objects, helpers and
-cached functions defined elsewhere.</p>
+<p>A cached <code>fetch</code> is not reported: the Data Cache keys a fetch on its URL, headers and body, so a token or
+user id there gives each user an entry of their own.</p>
+<p>The rule follows values through variables of the same function. It stays silent on helpers and cached functions
+defined elsewhere.</p>
 <h2>How to fix it</h2>
-<p>Do not cache per-user requests (<code>cache: 'no-store'</code>), or read cookies and the session outside the cached
-function and pass what the result depends on as an argument.</p>
+<p>Read cookies and the session outside the cached function and pass what the result depends on as an argument or a
+key part, or do not cache per-user data.</p>
 <h3>Noncompliant code example</h3>
 <pre>
 const session = await auth();
-const res = await fetch(`${API}/orders?user=${session.user.id}`, { next: { revalidate: 60 } }); // Noncompliant
-
 const getPlan = unstable_cache(async () =&gt; db.plan.find({ where: { userId: session.user.id } }), ['plan']); // Noncompliant
 
 async function getCart() {
@@ -34,8 +30,6 @@ async function getCart() {
 <h3>Compliant solution</h3>
 <pre>
 const session = await auth();
-const res = await fetch(`${API}/orders?user=${session.user.id}`, { cache: 'no-store' });
-
 const getPlan = unstable_cache(async (userId) =&gt; db.plan.find({ where: { userId } }), ['plan']);
 const plan = await getPlan(session.user.id);
 

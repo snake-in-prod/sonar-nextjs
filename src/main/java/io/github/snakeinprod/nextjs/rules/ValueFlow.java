@@ -23,9 +23,10 @@ import java.util.function.Predicate;
 /**
  * Follows values through the local variables of one function (a scope: an outermost function literal of the file,
  * nested functions included) for OpenRedirect, UnsafeHtmlFromInput and PersonalizedCachedFetch. A name is tainted
- * when every declaration or assignment of it in the scope has a tainted initializer; names are not scoped further.
- * Each tainted name keeps its keys: the token texts of the expressions it came from ("searchParams . get ( 'next' )"),
- * so that a check on any of them can be found.
+ * when every declaration or assignment of it in the scope has a tainted initializer and no function of the scope has a
+ * parameter of that name ({@code items.map((c) => c.html)} beside {@code const c = searchParams.get('c')}); names are
+ * not scoped further. Each tainted name keeps its keys: the token texts of the expressions it came from
+ * ("searchParams . get ( 'next' )"), so that a check on any of them can be found.
  */
 final class ValueFlow {
 
@@ -46,7 +47,25 @@ final class ValueFlow {
   ValueFlow(JsTrees.Fn fn, Source source, Map<String, List<List<String>>> seeds) {
     this.scope = new Node.Group(null, null, fn.container().children().subList(fn.start(), fn.end()));
     this.tokens = Nodes.tokens(scope);
-    this.tainted = taint(declarations(scope), source, seeds);
+    this.tainted = taint(declarations(scope), source, seeds, parameters(scope));
+  }
+
+  /** Names bound by the parameters of the functions in the scope: values the flow cannot see. */
+  private static Set<String> parameters(Node.Group scope) {
+    Set<String> out = new HashSet<>();
+    for (JsTrees.Fn f : JsTrees.functions(scope)) {
+      if (f.params() == null) {
+        out.add(f.param().text());
+        continue;
+      }
+      for (List<Node> item : f.params().items()) {
+        int k = !item.isEmpty() && Nodes.isLeaf(item.get(0), "...") ? 1 : 0;
+        if (k < item.size()) {
+          names(item.get(k)).forEach(t -> out.add(t.text()));
+        }
+      }
+    }
+    return out;
   }
 
   /** Local names of these exports of a package: {@code import { redirect as go } from 'next/navigation'} gives go. */
@@ -251,7 +270,8 @@ final class ValueFlow {
 
   // ---------------------------------------------------------------- taint
 
-  private static Map<String, List<List<String>>> taint(List<Decl> decls, Source source, Map<String, List<List<String>>> seeds) {
+  private static Map<String, List<List<String>>> taint(List<Decl> decls, Source source, Map<String, List<List<String>>> seeds,
+    Set<String> parameters) {
     Map<String, List<Decl>> byName = new LinkedHashMap<>();
     for (Decl d : decls) {
       for (Token n : d.names()) {
@@ -263,7 +283,7 @@ final class ValueFlow {
     while (changed) {
       changed = false;
       for (Map.Entry<String, List<Decl>> e : byName.entrySet()) {
-        if (tainted.containsKey(e.getKey())) {
+        if (tainted.containsKey(e.getKey()) || parameters.contains(e.getKey())) {
           continue;
         }
         List<List<String>> keys = new ArrayList<>();
@@ -439,6 +459,7 @@ final class ValueFlow {
     static final Set<String> PASSTHROUGH = Set.of("toString", "trim", "toLowerCase", "toUpperCase", "valueOf", "at");
     private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then");
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
+    private static final Set<String> FORM_GETTERS = Set.of("get", "getAll");
 
     private final boolean html;
     private final boolean route;
@@ -561,7 +582,13 @@ final class ValueFlow {
           return null;
         }
       }
-      source |= names.stream().anyMatch(n -> ROOTS.contains(n) && (route || !n.equals("params"))) || html && "fetch".equals(root);
+      for (int k = 0; k < names.size(); k++) {
+        String n = names.get(k);
+        // a variable named formData is FormData when read with get(); formData.title is form state
+        source |= ROOTS.contains(n) && (route || !n.equals("params"))
+          && !(k == 0 && n.equals("formData") && (names.size() < 2 || !FORM_GETTERS.contains(names.get(1))));
+      }
+      source |= html && "fetch".equals(root);
       if (!source) {
         return null;
       }

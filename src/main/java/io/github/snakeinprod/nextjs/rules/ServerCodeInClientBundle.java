@@ -6,12 +6,16 @@ import io.github.snakeinprod.nextjs.model.Import;
 import io.github.snakeinprod.nextjs.model.Module;
 import io.github.snakeinprod.nextjs.model.NextModel;
 import io.github.snakeinprod.nextjs.parse.Chain;
+import io.github.snakeinprod.nextjs.parse.Node;
+import io.github.snakeinprod.nextjs.parse.Nodes;
 import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,11 +26,13 @@ import java.util.regex.Pattern;
  * Client components should not import server-only code. A "use client" module that imports, directly or through
  * modules without a directive, "server-only", a Node.js built-in the browser has no fallback for (with or without
  * "node:"), or a database client; or, in itself or a module it imports directly, Node crypto APIs (createHmac...) or
- * a read of a secret-looking server environment variable.
+ * a read of a secret-looking server environment variable, in code the bundle keeps.
  *
  * <p>Precision: only static imports count ({@code require} and {@code import()} are often guarded), and only imports
  * whose names the module uses as values (an import used for types only is erased by the compiler). Other "use client"
- * modules are not entered (they get their own issue), nor "use server" modules (the client gets references only).
+ * modules are not entered (they get their own issue), nor "use server" modules (the client gets references only). In
+ * the imported module, crypto and env reads inside exported declarations the client does not import are left out:
+ * tree shaking drops them.
  */
 public class ServerCodeInClientBundle implements NextRule {
 
@@ -43,15 +49,20 @@ public class ServerCodeInClientBundle implements NextRule {
   private static final Pattern DRIZZLE_DRIVER = Pattern.compile("drizzle-orm/(node-postgres|postgres-js|neon-http|neon-serverless"
     + "|mysql2|planetscale-serverless|better-sqlite3|libsql|vercel-postgres|d1|bun-sqlite|pglite|xata-http|tidb-serverless"
     + "|aws-data-api.*|singlestore|mysql-proxy|pg-proxy|sqlite-proxy|durable-sqlite|neon)(/.*)?");
-  /** A server env name that says it holds a secret or a database location. */
+  /** A server env name that says it holds a secret or a database location (a bare _URI or _DSN may be any endpoint). */
   private static final Pattern SECRET_ENV = Pattern.compile(
-    "(.*_)?(SECRET|PASSWORD|PASSWD|PRIVATE|TOKEN|CREDENTIALS?|SERVICE_ROLE|DATABASE|DB|KEY|URI|DSN)(_.*)?");
+    "(.*_)?(SECRET|PASSWORD|PASSWD|PRIVATE|TOKEN|CREDENTIALS?|SERVICE_ROLE|DATABASE|DB|KEY)(_.*)?"
+      + "|(.*_)?(MONGO|MONGODB|POSTGRES|POSTGRESQL|PG|MYSQL|REDIS|KV)_(URI|URL|DSN)(_.*)?");
   /** Before a name in a type: {@code x: T}, {@code extends T}, {@code typeof t}, {@code A | T}. */
   private static final Set<String> TYPE_BEFORE = Set.of(":", "extends", "implements", "typeof", "keyof", "as", "satisfies", "|",
     "&", "is", "infer", "type", "interface", "readonly", "unique", "declare", ".", "?.", "#");
   /** Keywords that can come right before a JSX element. */
   private static final Set<String> JSX_KEYWORDS = Set.of("return", "yield", "await", "case", "default", "else", "do", "in", "of",
     "void", "throw", "new");
+  /** Keywords starting a top-level declaration. */
+  private static final Set<String> DECLARATIONS = Set.of("const", "let", "var", "function", "class");
+  /** Before a "function" or "class" keyword that is an expression, not a declaration. */
+  private static final Set<String> IN_EXPRESSION = Set.of("=", "(", ",", ":", "?", "=>", "return", "||", "&&", "??", "!");
 
   private static final String CRYPTO = "Node.js crypto (";
 
@@ -68,7 +79,7 @@ public class ServerCodeInClientBundle implements NextRule {
       return;
     }
     for (Import i : m.imports()) {
-      if (!loaded(m, i)) {
+      if (!loaded(ctx.model(), m, i)) {
         continue;
       }
       String own = packageReason(m, i);
@@ -78,8 +89,9 @@ public class ServerCodeInClientBundle implements NextRule {
       }
       Module t = ctx.model().target(i);
       if (t != null && entered(t)) {
-        reach(ctx.model(), t).ifPresent(f -> ctx.report(i.token(), "Remove this import from the client component: it pulls "
-          + f.what() + " into the browser bundle through " + f.through().path() + "."));
+        reach(ctx.model(), t).or(() -> direct(ctx.model(), t, i)).ifPresent(f -> ctx.report(i.token(),
+          "Remove this import from the client component: it pulls " + f.what() + " into the browser bundle through "
+            + f.through().path() + "."));
       }
     }
   }
@@ -88,7 +100,11 @@ public class ServerCodeInClientBundle implements NextRule {
     return !t.has(Directive.USE_CLIENT) && !t.has(Directive.USE_SERVER);
   }
 
-  /** The first server-only thing reached from {@code start} through loaded imports, breadth first. */
+  /**
+   * The first server-only package reached from {@code start} through loaded imports, breadth first. Node crypto counts
+   * only in the imported module (see {@link #direct}): further down, tree shaking may drop the code, while server-only,
+   * Node-only built-ins and database drivers fail wherever they are.
+   */
   private Optional<Finding> reach(NextModel model, Module start) {
     Optional<Finding> cached = reached.get(start);
     if (cached != null) {
@@ -99,15 +115,12 @@ public class ServerCodeInClientBundle implements NextRule {
     Optional<Finding> out = Optional.empty();
     while (!queue.isEmpty() && out.isEmpty()) {
       Module v = queue.poll();
-      // ponytail: Node crypto and env reads only one hop deep; further down, tree shaking may drop the code (no import
-      // graph can tell), while server-only, Node-only built-ins and database drivers fail wherever they are
-      boolean direct = v == start;
       for (Import i : v.imports()) {
-        if (out.isPresent() || !loaded(v, i)) {
+        if (out.isPresent() || !loaded(model, v, i)) {
           continue;
         }
         String r = packageReason(v, i);
-        if (r != null && (direct || !r.startsWith(CRYPTO))) {
+        if (r != null && !r.startsWith(CRYPTO)) {
           out = Optional.of(new Finding(r, v));
         }
         Module t = model.target(i);
@@ -115,17 +128,112 @@ public class ServerCodeInClientBundle implements NextRule {
           queue.add(t);
         }
       }
-      if (out.isEmpty() && direct) {
-        for (EnvRead e : ServerEnvInClient.serverReads(model, v, configEnv)) {
-          if (SECRET_ENV.matcher(e.name()).matches()) {
-            out = Optional.of(new Finding("code reading the server environment variable " + e.name(), v));
-            break;
+    }
+    reached.put(start, out);
+    return out;
+  }
+
+  /**
+   * Node crypto or a secret env read in the module {@code t} the client imports through {@code i}, in code the bundle
+   * keeps: a top-level statement that is not an exported declaration, or the declaration of a name the client imports.
+   */
+  private Optional<Finding> direct(NextModel model, Module t, Import i) {
+    Set<String> names = i.reExport() || i.names().isEmpty() || i.names().containsValue("*") ? null : Set.copyOf(i.names().values());
+    for (Import j : t.imports()) {
+      if (loaded(model, t, j)) {
+        for (Map.Entry<Token, String> u : cryptoUses(t, j).entrySet()) {
+          if (kept(t, u.getKey(), names)) {
+            return Optional.of(new Finding(CRYPTO + u.getValue() + ")", t));
           }
         }
       }
     }
-    reached.put(start, out);
-    return out;
+    for (EnvRead e : ServerEnvInClient.serverReads(model, t, configEnv)) {
+      if (SECRET_ENV.matcher(e.name()).matches() && kept(t, e.token(), names)) {
+        return Optional.of(new Finding("code reading the server environment variable " + e.name(), t));
+      }
+    }
+    return Optional.empty();
+  }
+
+  /** A top-level statement: the name it declares (null for other code), its export names, whether a function. */
+  private record Stmt(String declared, Set<String> exported, boolean function) {
+
+    /** Kept by tree shaking when the module is imported for {@code names}, private function declarations aside. */
+    boolean keptFor(Set<String> names) {
+      return exported.isEmpty() ? declared == null || !function : exported.stream().anyMatch(names::contains);
+    }
+  }
+
+  /**
+   * The token is in code the bundle keeps when the module is imported for {@code names} (null: for everything): side
+   * effect code, a private constant, the declaration of an imported name, or a private function that one of those uses.
+   */
+  // ponytail: one level of private function calls; a helper called through another helper counts as dropped
+  private static boolean kept(Module t, Token use, Set<String> names) {
+    if (names == null) {
+      return true;
+    }
+    Stmt s = statementOf(t, use);
+    if (s.keptFor(names) || !s.exported().isEmpty()) {
+      return s.keptFor(names);
+    }
+    for (Token k : t.file().tokens()) {
+      if (k.isIdent(s.declared())) {
+        Stmt r = statementOf(t, k);
+        if (!s.declared().equals(r.declared()) && r.keptFor(names)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The top-level statement holding {@code use}. */
+  private static Stmt statementOf(Module t, Token use) {
+    String declared = null;
+    boolean function = false;
+    boolean exportDefault = false;
+    boolean pending = false;
+    Token before = null;
+    for (Node k : t.file().root().children()) {
+      Token tok = Nodes.leaf(k);
+      if (ValueFlow.within(use, k.first(), k.last())) {
+        if (pending && tok != null && tok.kind() == TokenKind.IDENT) {
+          declared = tok.text();
+        }
+        break;
+      }
+      if (tok == null) {
+        pending = false;
+      } else if (tok.is(";") || tok.isIdent("import") || tok.isIdent("export")) {
+        declared = null;
+        exportDefault = false;
+        pending = false;
+      } else if (tok.isIdent("default") && before != null && before.isIdent("export")) {
+        exportDefault = true;
+      } else if (tok.kind() == TokenKind.IDENT && DECLARATIONS.contains(tok.text())
+        && (before == null || !IN_EXPRESSION.contains(before.text()))) {
+        declared = null;
+        function = tok.text().equals("function");
+        pending = true;
+      } else if (pending && tok.kind() == TokenKind.IDENT) {
+        declared = tok.text();
+        pending = false;
+      }
+      before = tok;
+    }
+    Set<String> out = new HashSet<>();
+    if (exportDefault) {
+      out.add("default");
+    }
+    String local = declared;
+    t.exports().forEach((name, token) -> {
+      if (token.text().equals(local)) {
+        out.add(name);
+      }
+    });
+    return new Stmt(declared, out, function);
   }
 
   /** What a package import brings that must stay on the server, or null. */
@@ -140,20 +248,7 @@ public class ServerCodeInClientBundle implements NextRule {
       return "the Node.js module \"" + spec + "\"";
     }
     if (builtin.equals("crypto")) {
-      for (Map.Entry<String, String> n : i.names().entrySet()) {
-        if (NODE_CRYPTO.contains(n.getValue()) && valueUse(m, i, n.getKey())) {
-          return CRYPTO + n.getValue() + ")";
-        }
-        if (n.getValue().equals("default") || n.getValue().equals("*")) {
-          for (Chain c : m.file().chains()) {
-            List<String> names = c.names();
-            if (names.size() > 1 && names.get(0).equals(n.getKey()) && NODE_CRYPTO.contains(names.get(1))) {
-              return CRYPTO + names.get(1) + ")";
-            }
-          }
-        }
-      }
-      return null;
+      return cryptoUses(m, i).values().stream().findFirst().map(n -> CRYPTO + n + ")").orElse(null);
     }
     if (i.packageName() != null && DB_PACKAGES.contains(i.packageName()) || DRIZZLE_DRIVER.matcher(spec).matches()) {
       return "the database client \"" + spec + "\"";
@@ -164,18 +259,43 @@ public class ServerCodeInClientBundle implements NextRule {
     return null;
   }
 
+  /** Uses of Node crypto APIs through a "crypto" import, to the API name, in order. */
+  private static Map<Token, String> cryptoUses(Module m, Import i) {
+    Map<Token, String> out = new LinkedHashMap<>();
+    String spec = i.spec();
+    if (!spec.equals("crypto") && !spec.equals("node:crypto")) {
+      return out;
+    }
+    for (Map.Entry<String, String> n : i.names().entrySet()) {
+      if (NODE_CRYPTO.contains(n.getValue())) {
+        valueUses(m, i, n.getKey()).forEach(t -> out.putIfAbsent(t, n.getValue()));
+      }
+      if (n.getValue().equals("default") || n.getValue().equals("*")) {
+        for (Chain c : m.file().chains()) {
+          List<String> names = c.names();
+          if (names.size() > 1 && names.get(0).equals(n.getKey()) && NODE_CRYPTO.contains(names.get(1))) {
+            out.putIfAbsent(c.first(), names.get(1));
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /**
    * The import is in the bundle when the module is: a static import or re-export, not type-only, whose names the
-   * module uses as values (or a side effect import).
+   * module uses as values (or a side effect import), and that the target does not export only as types.
    */
-  private static boolean loaded(Module m, Import i) {
+  private static boolean loaded(NextModel model, Module m, Import i) {
     if (i.typeOnly() || i.dynamic() || isCall(m, i)) {
       return false;
     }
     if (i.reExport() || i.names().isEmpty()) {
       return true;
     }
-    return i.names().keySet().stream().anyMatch(local -> valueUse(m, i, local));
+    Module t = model.target(i);
+    return i.names().entrySet().stream()
+      .anyMatch(n -> (t == null || !t.typeExports().contains(n.getValue())) && valueUse(m, i, n.getKey()));
   }
 
   /** {@code require('x')}: the specifier is an argument. */
@@ -189,7 +309,12 @@ public class ServerCodeInClientBundle implements NextRule {
    * {@code local} appears outside the import statement in a value position: called, read, passed, rendered as JSX.
    * Positions that are or may be types are not values: after ":", "extends", "typeof", "|", inside generics.
    */
-  static boolean valueUse(Module m, Import i, String local) {
+  private static boolean valueUse(Module m, Import i, String local) {
+    return !valueUses(m, i, local).isEmpty();
+  }
+
+  private static List<Token> valueUses(Module m, Import i, String local) {
+    List<Token> out = new ArrayList<>();
     List<Token> t = m.file().tokens();
     int spec = t.indexOf(i.token());
     int start = spec;
@@ -202,18 +327,17 @@ public class ServerCodeInClientBundle implements NextRule {
       }
       Token prev = k > 0 ? t.get(k - 1) : null;
       Token next = k + 1 < t.size() ? t.get(k + 1) : null;
-      if (prev == null) {
-        return true;
-      }
-      if (TYPE_BEFORE.contains(prev.text())
+      if (prev != null && (TYPE_BEFORE.contains(prev.text())
+        // the return type of a function type member: getId: (item: Item) => ObjectId;
+        || prev.is("=>") && next != null && next.is(";")
         || next != null && next.is(":") && (prev.is("{") || prev.is(","))
         || prev.is("<") && k > 1 && t.get(k - 2).kind() == TokenKind.IDENT && !JSX_KEYWORDS.contains(t.get(k - 2).text())
         || prev.is(",") && next != null && (next.is(">") || next.is(","))
-        || prev.is("=") && k > 2 && t.get(k - 3).isIdent("type")) {
+        || prev.is("=") && k > 2 && t.get(k - 3).isIdent("type"))) {
         continue;
       }
-      return true;
+      out.add(t.get(k));
     }
-    return false;
+    return out;
   }
 }

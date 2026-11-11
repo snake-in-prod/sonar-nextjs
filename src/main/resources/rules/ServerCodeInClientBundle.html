@@ -7,7 +7,8 @@ in a client module that brings server code into that bundle, directly or through
   <li>a database client (<code>PrismaClient</code>, drizzle drivers, <code>pg</code>, <code>mysql2</code>,
     <code>mongodb</code>, <code>@vercel/postgres</code>, <code>kysely</code>...);</li>
   <li>in the imported module itself: Node.js crypto APIs such as <code>createHmac</code> or <code>createCipheriv</code>,
-    or a read of a server environment variable whose name says it holds a secret or a database location.</li>
+    or a read of a server environment variable whose name says it holds a secret or a database location, in code the
+    bundle keeps: not inside an exported function or constant the client does not import, which tree shaking drops.</li>
 </ul>
 <p>Imports used for types only, <code>require()</code>, <code>import()</code> and imports of <code>"use server"</code>
 modules are not reported.</p>

@@ -300,6 +300,12 @@ window.registerExtension('nextjs/nextjs', function (options) {
   var tiles = h('ul', {class: 'nx-tiles', 'aria-label': 'Headline measures'});
   var side = h('div', {class: 'nx-side'});
   var main = h('div', {class: 'nx-main'});
+  // SonarQube keeps only the changed files of a pull request: the measures add up those, nx_routes_json is the whole app
+  var whole = scope.pullRequest === undefined;
+  if (!whole) {
+    root.appendChild(h('p', {class: 'nx-muted', style: 'margin:0 0 12px 0'}, ['Pull request: the numbers and the client/server split count the files it ' +
+      'changes; the routes and Server Actions panels show the whole app.']));
+  }
   root.appendChild(tiles);
   root.appendChild(main);
   // SonarQube places extension pages in a grid of two columns: span both, or the page gets only the first one
@@ -377,13 +383,13 @@ window.registerExtension('nextjs/nextjs', function (options) {
     });
     var ratio = values.nx_client_ratio;
     [
-      {key: 'nx_routes', sub: routes.length ? plural(routes.length - handlers, 'page') + ' · ' + plural(handlers, 'API route') : null},
+      {key: 'nx_routes', sub: whole && routes.length ? plural(routes.length - handlers, 'page') + ' · ' + plural(handlers, 'API route') : null},
       {key: 'nx_client_ratio', unit: '%', extra: ratio === undefined ? null : meter(ratio / 100, 120, 'Client ratio ' + fmt(ratio) + '%'),
         sub: values.nx_client_modules !== undefined ? plural(values.nx_client_modules, 'client module') : null},
       {key: 'nx_unprotected_endpoints', bad: unprotected > 0, href: unprotected > 0 ?
         page('project/issues', {resolved: 'false', rules: authRules.join(',')}) : null,
-      sub: values.nx_server_actions !== undefined ? plural(values.nx_server_actions, 'Server Action') + ' · ' +
-        plural(handlers, 'handler') : null},
+      sub: values.nx_server_actions !== undefined ? plural(values.nx_server_actions, 'Server Action') +
+        (whole ? ' · ' + plural(handlers, 'handler') : '') : null},
       {key: 'nx_dynamic_routes', sub: values.nx_routes ? 'of ' + fmt(values.nx_routes) : null}
     ].forEach(function (t) {
       var v = values[t.key];

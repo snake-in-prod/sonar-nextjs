@@ -8,4 +8,9 @@ import io.github.snakeinprod.nextjs.parse.Token;
  * with "use server". {@code name} is the function's name token, or its first token when it has no name.
  */
 public record ServerAction(Token name, JsTrees.Fn fn, boolean inline) {
+
+  /** The name to show: the function's name, or "inline (line N)" for an anonymous inline action. */
+  public String label() {
+    return inline && JsTrees.nameOf(fn) == null ? "inline (line " + name.line() + ")" : name.text();
+  }
 }

@@ -29,7 +29,7 @@ public final class RoutesJson {
           model.clientModulesOf(m).size(), count));
       }
       for (ServerAction a : m.serverActions()) {
-        out.add(entry(m.path() + "#" + a.name().text(), "action", m, false, 0, count));
+        out.add(entry(m.path() + "#" + a.label(), "action", m, false, 0, count));
       }
     }
     return out.toString();

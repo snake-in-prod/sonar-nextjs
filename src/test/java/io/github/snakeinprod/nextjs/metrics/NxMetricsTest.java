@@ -61,6 +61,14 @@ class NxMetricsTest {
     assertThat(routes).hasSize(10);
   }
 
+  @Test
+  void anonymous_inline_action_is_named_by_its_line() {
+    NextModel m = NextModel.build(TestProjects.of(Map.of("package.json", "{\"dependencies\":{\"next\":\"15.0.0\"}}",
+      "app/page.tsx", "export default function Page() {\n  return <form action={async () => {\n    'use server';\n  }} />;\n}\n")));
+    JsonArray routes = JsonParser.parseString(RoutesJson.build(m, Map.of())).getAsJsonArray();
+    assertThat(find(routes, "app/page.tsx#inline (line 2)").get("kind").getAsString()).isEqualTo("action");
+  }
+
   private static JsonObject find(JsonArray routes, String path) {
     for (var e : routes) {
       if (e.getAsJsonObject().get("path").getAsString().equals(path)) {

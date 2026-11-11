@@ -85,6 +85,9 @@ public final class RuleCatalog {
     spec("SearchParamsWithoutSuspense", Type.BUG, "MINOR", false, "useSearchParams should be wrapped in a Suspense boundary",
       "useSearchParams() in a client component used by a statically rendered page without a Suspense boundary makes the whole page render on the client, or fails the build.",
       "'use client';\nconst q = useSearchParams(); // Noncompliant: no <Suspense> above it", SearchParamsWithoutSuspense::new),
+    spec("EdgeRuntimeNodeImport", Type.BUG, "MAJOR", true, "Edge runtime code should not import Node.js-only modules",
+      "A route, page, layout or middleware running on the Edge runtime (export const runtime = 'edge', or middleware without runtime: 'nodejs') that imports, directly or through project modules, a Node.js built-in the Edge runtime lacks (fs, child_process, net, crypto...) or a package that needs Node.js (bcrypt, pg, mysql2, mongoose, nodemailer, sharp, jsonwebtoken, PrismaClient without a driver adapter). It fails at build or when the code runs.",
+      "// middleware.ts\nimport jwt from 'jsonwebtoken'; // Noncompliant: needs Node.js crypto", EdgeRuntimeNodeImport::new),
     spec("ImageFillWithoutSizes", Type.CODE_SMELL, "MINOR", false, "next/image with fill should set sizes",
       "An Image with fill and no sizes downloads the largest image for every viewport.",
       "<Image src={src} alt=\"\" fill /> // Noncompliant", ImageFillWithoutSizes::new));

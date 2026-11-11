@@ -56,7 +56,7 @@ The lexer never throws; a broken file still gives a tree.
 | `route()` | the Next.js convention, or null |
 | `inAppDir()` | under app/ or src/app/ of a Next.js package |
 | `role()`, `reachedFromServer()` | see Roles |
-| `runtime()` | "edge" (`export const runtime = 'edge'`, middleware.ts) or "node" |
+| `runtime()` | "edge" (`export const runtime = 'edge'` or `config = { runtime: 'edge' }`, middleware.ts unless its config sets `runtime: 'nodejs'`) or "node" |
 
 `Import(spec, resolved, token, names, typeOnly, reExport, dynamic)`: `spec` as written, `resolved` the project file or
 null (a package, a Node built-in, not found), `token` the specifier string to report on, `names` local to imported

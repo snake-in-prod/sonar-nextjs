@@ -42,6 +42,7 @@ extend "Next.js".
 | ClientHookInServerComponent | Bug | Major | yes |
 | SyncParamsAccess | Bug | Major | yes |
 | MetadataExportedTwice | Bug | Major | yes |
+| EdgeRuntimeNodeImport | Bug | Major | yes |
 | SearchParamsWithoutSuspense | Bug | Minor | no |
 | ImageFillWithoutSizes | Code smell | Minor | no |
 

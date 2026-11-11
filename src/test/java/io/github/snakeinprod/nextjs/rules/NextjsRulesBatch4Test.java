@@ -19,4 +19,10 @@ class NextjsRulesBatch4Test {
   void sync_params_access() {
     RuleVerifier.verify("SyncParamsAccess");
   }
+
+  @Test
+  void edge_runtime_node_import() {
+    RuleVerifier.verify("EdgeRuntimeNodeImport");
+    RuleVerifier.verify("EdgeRuntimeNodeImportNodeMiddleware", new EdgeRuntimeNodeImport());
+  }
 }

@@ -1,0 +1,40 @@
+<p>This rule reports imports in code that runs on the Edge runtime: a route handler, page, layout or other app/ file
+with <code>export const runtime = 'edge'</code>, a Pages Router file with <code>config = { runtime: 'edge' }</code>, and
+<code>middleware.ts</code> unless its <code>config</code> sets <code>runtime: 'nodejs'</code>. An import is reported
+when it loads, directly or through project modules, a Node.js built-in the Edge runtime does not have
+(<code>fs</code>, <code>child_process</code>, <code>net</code>, <code>tls</code>, <code>os</code>, <code>http</code>,
+<code>zlib</code>, <code>crypto</code>... with or without <code>node:</code>), or a package that needs Node.js
+(<code>bcrypt</code>, <code>argon2</code>, <code>pg</code>, <code>mysql2</code>, <code>mongoose</code>,
+<code>mongodb</code>, <code>sqlite3</code>, <code>better-sqlite3</code>, <code>nodemailer</code>, <code>sharp</code>,
+<code>ioredis</code>, <code>jsonwebtoken</code>, <code>firebase-admin</code>, a <code>PrismaClient</code> created
+without a driver adapter or Accelerate). Type-only imports, <code>require()</code> and <code>import()</code> are not
+reported, nor the built-ins the Edge runtime provides (<code>buffer</code>, <code>events</code>, <code>util</code>,
+<code>assert</code>, <code>async_hooks</code>) and drivers with edge builds (<code>@neondatabase/serverless</code>,
+<code>postgres</code>, <code>@libsql/client</code>...).</p>
+<h2>Why is this an issue?</h2>
+<p>The Edge runtime offers Web APIs, not Node.js. A Node.js module it lacks fails the build, or is replaced by a stub
+that throws as soon as the code touches it: middleware that signs a cookie with <code>createHmac</code> rejects every
+request, a <code>PrismaClient</code> created when <code>auth.ts</code> loads crashes the middleware importing it.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+// middleware.ts
+export { auth as middleware } from '@/auth'; // Noncompliant: auth.ts -> lib/db.ts creates a PrismaClient
+</pre>
+<pre>
+// app/api/token/route.ts
+import jwt from 'jsonwebtoken'; // Noncompliant
+
+export const runtime = 'edge';
+</pre>
+<h2>Compliant solution</h2>
+<p>Use edge-compatible code (Web Crypto, <code>jose</code>, an HTTP database driver or a Prisma driver adapter), keep
+the Node.js-only code out of what the edge file imports (an edge-safe <code>auth.config.ts</code> for Auth.js), or
+run the file on Node.js: remove <code>runtime = 'edge'</code>, or set <code>runtime: 'nodejs'</code> in the
+middleware config (Next.js 15.5 and later).</p>
+<pre>
+// middleware.ts
+import NextAuth from 'next-auth';
+import authConfig from './auth.config'; // providers only, no adapter
+
+export const { auth: middleware } = NextAuth(authConfig);
+</pre>

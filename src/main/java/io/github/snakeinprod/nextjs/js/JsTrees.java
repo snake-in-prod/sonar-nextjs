@@ -79,12 +79,15 @@ public final class JsTrees {
       if (j < kids.size() && Nodes.leaf(kids.get(j)) != null && Nodes.leaf(kids.get(j)).kind() == TokenKind.IDENT) {
         j++;
       }
+      j = typeArguments(kids, j);
       if (j >= kids.size() || !(kids.get(j) instanceof Node.Group params) || !params.is("(")) {
         return null;
       }
       j++;
-      // TypeScript return type
-      while (j < kids.size() && kids.get(j) instanceof Node.Leaf l && !l.token().is(",") && !l.token().is(";")) {
+      // TypeScript return type, a function type too: (): (...args: A) => Promise<R> {
+      boolean typed = j < kids.size() && Nodes.isLeaf(kids.get(j), ":");
+      while (j < kids.size() && (kids.get(j) instanceof Node.Leaf l && !l.token().is(",") && !l.token().is(";")
+        || typed && kids.get(j) instanceof Node.Group t && (t.is("(") || t.is("[")))) {
         j++;
       }
       if (j < kids.size() && kids.get(j) instanceof Node.Group body && body.is("{")) {
@@ -167,7 +170,7 @@ public final class JsTrees {
       Token t = j < kids.size() ? Nodes.leaf(kids.get(j)) : null;
       return t != null && t.kind() == TokenKind.IDENT ? t : null;
     }
-    int k = f.start() - 1;
+    int k = typeParametersBefore(kids, f.start() - 1);
     if (k < 1 || !(Nodes.isLeaf(kids.get(k), "=") || Nodes.isLeaf(kids.get(k), ":"))) {
       return null;
     }
@@ -187,6 +190,43 @@ public final class JsTrees {
     }
     Token t = Nodes.leaf(kids.get(k - 1));
     return t != null && t.kind() == TokenKind.IDENT ? t : null;
+  }
+
+  /** Skips {@code <...>} type arguments or parameters starting at i; returns the index after them, or i when there are none. */
+  public static int typeArguments(List<Node> kids, int i) {
+    if (i >= kids.size() || !Nodes.isLeaf(kids.get(i), "<")) {
+      return i;
+    }
+    int depth = 0;
+    for (int j = i; j < kids.size(); j++) {
+      depth += angles(kids.get(j));
+      if (depth <= 0) {
+        return j + 1;
+      }
+    }
+    return i;
+  }
+
+  /** The index before the {@code <...>} type parameters ending at k ({@code const f = <T,>(x: T) => ...}), or k when none end there. */
+  private static int typeParametersBefore(List<Node> kids, int k) {
+    if (k < 1 || angles(kids.get(k)) >= 0) {
+      return k;
+    }
+    int depth = 0;
+    for (int j = k; j >= 0; j--) {
+      depth += angles(kids.get(j));
+      if (depth >= 0) {
+        return j - 1;
+      }
+    }
+    return k;
+  }
+
+  /** "<" counts 1, ">" and ">>" -1 and -2, any other node 0. */
+  private static int angles(Node n) {
+    Token t = Nodes.leaf(n);
+    return t == null || t.kind() != TokenKind.OP || !t.text().matches("[<>]+") ? 0
+      : t.text().chars().map(c -> c == '<' ? 1 : -1).sum();
   }
 
   /** The nodes of an expression from {@code from} to the end of its statement (";", ",", or a new line without an operator). */

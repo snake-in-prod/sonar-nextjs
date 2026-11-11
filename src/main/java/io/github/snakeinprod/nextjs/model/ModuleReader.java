@@ -52,6 +52,7 @@ final class ModuleReader {
     Map<String, JsTrees.Fn> functions = new LinkedHashMap<>();
     Map<String, List<JsTrees.Fn>> withDirective = new HashMap<>();
     List<ServerAction> actions = new ArrayList<>();
+    List<Module.Wrapped> wrapped = new ArrayList<>();
     for (JsTrees.Fn f : all) {
       if (f.container() == root) {
         Token name = JsTrees.nameOf(f);
@@ -75,11 +76,17 @@ final class ModuleReader {
           : e.getValue().text());
         if (f != null) {
           Token name = JsTrees.nameOf(f);
-          actions.add(new ServerAction(name != null ? name : e.getValue(), f, false, null));
+          actions.add(new ServerAction(name != null ? name : e.getValue(), f, false, null, null));
         } else {
-          ActionBuilder b = ActionBuilder.declared(root, e.getValue().text());
+          ActionBuilder b = e.getValue().isIdent("default") ? defaultBuilder(root, e.getValue())
+            : ActionBuilder.declared(root, e.getValue().text());
           if (b != null && b.handler() != null) {
-            actions.add(new ServerAction(e.getValue(), b.handler(), false, b));
+            actions.add(new ServerAction(e.getValue(), b.handler(), false, b, null));
+          } else if (b != null && b.client() == null && b.steps().size() == 1) {
+            Module.Wrapped w = wrapped(e.getValue(), b.steps().get(0), functions);
+            if (w != null) {
+              wrapped.add(w);
+            }
           }
         }
       }
@@ -89,7 +96,7 @@ final class ModuleReader {
         continue;
       }
       Token name = JsTrees.nameOf(f);
-      actions.add(new ServerAction(name != null ? name : f.container().children().get(f.start()).first(), f, true, null));
+      actions.add(new ServerAction(name != null ? name : f.container().children().get(f.start()).first(), f, true, null, null));
     }
     actions.sort((a, b) -> compare(a.name(), b.name()));
     List<EnvRead> env = new ArrayList<>();
@@ -105,10 +112,45 @@ final class ModuleReader {
         }
       }
     }
-    return new Module(file, directives, imports, exports, functions, withDirective, actions, env, runtime(tokens));
+    return new Module(file, directives, imports, exports, functions, withDirective, actions, wrapped, env, runtime(tokens));
   }
 
-  private static int compare(Token a, Token b) {
+  /** The call after {@code export default}, as a builder chain, or null. */
+  private static ActionBuilder defaultBuilder(Node.Group root, Token def) {
+    List<Node> kids = root.children();
+    for (int i = 0; i < kids.size(); i++) {
+      if (Nodes.leaf(kids.get(i)) == def) {
+        return ActionBuilder.of(JsTrees.initializer(kids, i + 1));
+      }
+    }
+    return null;
+  }
+
+  /** The first argument of the call that is a function literal or a top-level function of the module, or null. */
+  private static Module.Wrapped wrapped(Token name, ActionBuilder.Step call, Map<String, JsTrees.Fn> functions) {
+    List<Node> kids = call.args().children();
+    int arg = 0;
+    for (int i = 0; i < kids.size(); i++) {
+      if (Nodes.isLeaf(kids.get(i), ",")) {
+        arg++;
+        continue;
+      }
+      if (i > 0 && !Nodes.isLeaf(kids.get(i - 1), ",")) {
+        continue;
+      }
+      JsTrees.Fn f = JsTrees.functionAt(call.args(), i);
+      Token t = Nodes.leaf(kids.get(i));
+      if (f == null && t != null && (i + 1 == kids.size() || Nodes.isLeaf(kids.get(i + 1), ","))) {
+        f = functions.get(t.text());
+      }
+      if (f != null) {
+        return new Module.Wrapped(name, call.name(), arg, f);
+      }
+    }
+    return null;
+  }
+
+  static int compare(Token a, Token b) {
     return a.line() != b.line() ? Integer.compare(a.line(), b.line()) : Integer.compare(a.column(), b.column());
   }
 

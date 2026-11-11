@@ -66,16 +66,18 @@ public record ActionBuilder(Token client, List<Step> steps) {
       return null;
     }
     List<Step> steps = new ArrayList<>();
-    int i = 1;
+    int i = JsTrees.typeArguments(init, 1);
     Token client = base;
     if (i < init.size() && init.get(i) instanceof Node.Group g && g.is("(")) {
       steps.add(new Step(base, g));
       client = null;
       i++;
+    } else {
+      i = 1;
     }
     while (i + 2 < init.size() && (Nodes.isLeaf(init.get(i), ".") || Nodes.isLeaf(init.get(i), "?."))) {
       Token name = Nodes.leaf(init.get(i + 1));
-      int j = typeArguments(init, i + 2);
+      int j = JsTrees.typeArguments(init, i + 2);
       if (name == null || name.kind() != TokenKind.IDENT || j >= init.size() || !(init.get(j) instanceof Node.Group g && g.is("("))) {
         return null;
       }
@@ -83,23 +85,5 @@ public record ActionBuilder(Token client, List<Step> steps) {
       i = j + 1;
     }
     return i == init.size() && !steps.isEmpty() ? new ActionBuilder(client, List.copyOf(steps)) : null;
-  }
-
-  /** Skips {@code <...>} type arguments starting at i; returns the index after them, or i when there are none. */
-  private static int typeArguments(List<Node> init, int i) {
-    if (i >= init.size() || !Nodes.isLeaf(init.get(i), "<")) {
-      return i;
-    }
-    int depth = 0;
-    for (int j = i; j < init.size(); j++) {
-      Token t = Nodes.leaf(init.get(j));
-      if (t != null && t.kind() == TokenKind.OP && t.text().matches("[<>]+")) {
-        depth += t.text().chars().map(c -> c == '<' ? 1 : c == '>' ? -1 : 0).sum();
-        if (depth <= 0) {
-          return j + 1;
-        }
-      }
-    }
-    return i;
   }
 }

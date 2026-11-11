@@ -19,7 +19,9 @@ public final class Module {
   private final Map<String, Token> exports;
   private final Map<String, JsTrees.Fn> functions;
   private final Map<String, List<JsTrees.Fn>> functionDirectives;
-  private final List<ServerAction> serverActions;
+  List<ServerAction> serverActions;
+  /** Exported values of a "use server" module built by calling a function with a function, for the model to confirm. */
+  final List<Wrapped> wrapped;
   private final List<EnvRead> envReads;
   private final String runtimeExport;
   Route route;
@@ -30,7 +32,7 @@ public final class Module {
 
   Module(ParsedFile file, Set<Directive> directives, List<Import> imports, Map<String, Token> exports,
     Map<String, JsTrees.Fn> functions, Map<String, List<JsTrees.Fn>> functionDirectives, List<ServerAction> serverActions,
-    List<EnvRead> envReads, String runtimeExport) {
+    List<Wrapped> wrapped, List<EnvRead> envReads, String runtimeExport) {
     this.file = file;
     this.directives = Set.copyOf(directives);
     this.imports = List.copyOf(imports);
@@ -38,6 +40,7 @@ public final class Module {
     this.functions = Map.copyOf(functions);
     this.functionDirectives = Map.copyOf(functionDirectives);
     this.serverActions = List.copyOf(serverActions);
+    this.wrapped = List.copyOf(wrapped);
     this.envReads = List.copyOf(envReads);
     this.runtimeExport = runtimeExport;
   }
@@ -119,6 +122,10 @@ public final class Module {
   /** Functions, nested ones included, whose body starts with this directive ("use server", "use cache"). */
   public List<JsTrees.Fn> functionsWithDirective(String directive) {
     return functionDirectives.getOrDefault(directive, List.of());
+  }
+
+  /** {@code export const name = callee(..., fn, ...)}: fn is argument {@code arg} of the call. */
+  record Wrapped(Token name, Token callee, int arg, JsTrees.Fn fn) {
   }
 
   public List<ServerAction> serverActions() {

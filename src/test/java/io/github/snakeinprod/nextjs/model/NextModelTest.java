@@ -175,6 +175,57 @@ class NextModelTest {
   }
 
   @Test
+  void convention_files_under_app_or_pages_stay_routes_in_e2e_folders() {
+    String page = "export default function P() { return null; }";
+    NextModel m = NextModel.build(TestProjects.of(Map.of(
+      "package.json", "{\"dependencies\":{\"next\":\"15.0.0\"}}",
+      "app/e2e/warmup/page.tsx", page,
+      "app/e2e/warmup/helpers.ts", "export const a = 1;",
+      "app/e2e/warmup/page.spec.tsx", page,
+      "pages/playwright/login.tsx", page,
+      "e2e/app/page.tsx", page)));
+    assertThat(m.module("app/e2e/warmup/page.tsx").isTest()).isFalse();
+    assertThat(m.module("app/e2e/warmup/page.tsx").route().url()).isEqualTo("/e2e/warmup");
+    assertThat(m.module("pages/playwright/login.tsx").route().url()).isEqualTo("/playwright/login");
+    for (String p : List.of("app/e2e/warmup/helpers.ts", "app/e2e/warmup/page.spec.tsx", "e2e/app/page.tsx")) {
+      assertThat(m.module(p).isTest()).as(p).isTrue();
+    }
+  }
+
+  @Test
+  void values_built_by_a_wrapper_are_server_actions() {
+    NextModel m = NextModel.build(TestProjects.of(Map.of(
+      "package.json", "{\"dependencies\":{\"next\":\"15.0.0\"}}",
+      "lib/wrap.ts", String.join("\n",
+        "export function withAuth<T>(action: (u: User, ...a: any[]) => Promise<T>): (...a: any[]) => Promise<T> {",
+        "  return async (...args) => action(await auth(), ...args);",
+        "}",
+        "export const withTeam = <R,>(fn: (t: Team) => Promise<R>) => async () => fn(await team());",
+        "export function now(fn) { return fn(); }"),
+      "lib/index.ts", "export * from './wrap';",
+      "app/actions.ts", String.join("\n",
+        "'use server';",
+        "import { withAuth, withTeam, now } from '@/lib';",
+        "export const save = withAuth(async (user, id: string) => {});",
+        "export const pay = withTeam<number>(async function (team) { return 1; });",
+        "export const later = now(async () => {});",
+        "export const config = { a: 1 };",
+        "async function wipe() {}",
+        "export default withAuth(wipe);"),
+      "tsconfig.json", "{\"compilerOptions\":{\"paths\":{\"@/*\":[\"./*\"]}}}")));
+    Module actions = m.module("app/actions.ts");
+    assertThat(actions.serverActions()).extracting(a -> a.name().text()).containsExactly("save", "pay", "default");
+    ServerAction save = actions.serverActions().get(0);
+    assertThat(save.wrapper().module().path()).isEqualTo("lib/wrap.ts");
+    assertThat(save.fn().simpleParams()).extracting(io.github.snakeinprod.nextjs.parse.Token::text).containsExactly("user", "id");
+    assertThat(save.wrapper().clientArg(0)).isFalse();
+    assertThat(save.wrapper().clientArg(1)).isTrue();
+    assertThat(save.wrapper().validated()).isFalse();
+    assertThat(actions.serverActions().get(2).fn()).isSameAs(actions.functions().get("wipe"));
+    assertThat(m.module("lib/wrap.ts").functions()).containsKeys("withAuth", "withTeam", "now");
+  }
+
+  @Test
   void monorepo_packages_base_url_and_installed_version() {
     NextModel m = fixture("monorepo");
     assertThat(m.apps()).containsExactly(new NextModel.NextApp("apps/web/", 16));

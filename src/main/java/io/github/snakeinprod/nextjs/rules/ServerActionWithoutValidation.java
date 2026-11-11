@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
  * included), or a value built from one, to a database call or as the whole target of redirect(). Silent when the action
  * calls anything that looks like a validation (parse, safeParse, validate, assert, check...) or tests an input in a
  * condition, a comparison, typeof or an allow-list. An action built with an action library is validated by a
- * {@code .schema}, {@code .inputSchema} or {@code .input} step of its chain.
+ * {@code .schema}, {@code .inputSchema} or {@code .input} step of its chain, one built by a wrapper when the wrapper
+ * parses a schema; the wrapped function's parameters the wrapper fills itself (the user) are no input.
  */
 public class ServerActionWithoutValidation implements NextRule {
 
@@ -41,7 +42,9 @@ public class ServerActionWithoutValidation implements NextRule {
     }
     flow = ServerActionWithoutAuth.Flow.of(flow, ctx.model());
     for (ServerAction a : m.serverActions()) {
-      check(ctx, m, a.fn(), a.builder() == null ? params(a.fn()) : builderInputs(a));
+      if (a.wrapper() == null || !a.wrapper().validated()) {
+        check(ctx, m, a.fn(), a.builder() != null ? builderInputs(a) : a.wrapper() != null ? wrappedInputs(a) : params(a.fn()));
+      }
     }
   }
 
@@ -55,6 +58,26 @@ public class ServerActionWithoutValidation implements NextRule {
         if (item.get(0) instanceof Node.Group g && g.is("{")) {
           inputs.addAll(ServerActionWithoutAuth.Flow.patternNames(g));
         }
+      }
+    }
+    return inputs;
+  }
+
+  /** The parameters of a wrapped function the wrapper fills from the caller's arguments, not those it adds (the user). */
+  private static Set<String> wrappedInputs(ServerAction a) {
+    Set<String> inputs = new HashSet<>();
+    JsTrees.Fn fn = a.fn();
+    if (fn.param() != null) {
+      if (a.wrapper().clientArg(0)) {
+        inputs.add(fn.param().text());
+      }
+      return inputs;
+    }
+    List<List<Node>> items = fn.params().items();
+    for (int i = 0; i < items.size(); i++) {
+      List<Node> item = items.get(i);
+      if (a.wrapper().clientArg(i)) {
+        inputs.addAll(ServerActionWithoutAuth.Flow.patternNames(item.get(Nodes.isLeaf(item.get(0), "...") && item.size() > 1 ? 1 : 0)));
       }
     }
     return inputs;

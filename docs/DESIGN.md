@@ -49,7 +49,7 @@ The lexer never throws; a broken file still gives a tree.
 | `exports()` | exported name to the token of the local name (`export function f`, `export const f`, `export { a as b }`, `export default ...` as "default") |
 | `functions()` | top-level named functions (`function f`, `const f = () =>`), an anonymous default export as "default" |
 | `functionsWithDirective("use server")` | functions, nested ones too, whose body starts with that directive ("use cache" too) |
-| `serverActions()` | exported functions of a "use server" module, exported action library values (`builder()`, see below), and inline "use server" functions (`inline()`) |
+| `serverActions()` | exported functions of a "use server" module, exported action library values (`builder()`, see below), exported values built by a wrapper (`wrapper()`, see below), and inline "use server" functions (`inline()`) |
 | `builder(name)` | the action library chain a top-level `const name = ...` holds, or null |
 | `isTest()` | a test, mock, story or end-to-end file, see Test files |
 | `envReads()` | `process.env.X` and `process.env["X"]`: the name and its token |
@@ -108,9 +108,25 @@ and interception markers `(.)` removed, private folders `_x` left out, `dynamic`
 name, makes every action built on it authenticated. ServerActionWithoutValidation treats only `clientInput`,
 `bindArgsClientInputs`, and `parsedInput` / `input` without a schema step, as raw input.
 
+### Wrapped actions
+
+`export const x = withAuth(async (user, id) => ...)`, `protectedAction(schema, async function (...) {...})` or
+`export default withSession(handler)` (a top-level function of the module) in a "use server" module are Server
+Actions when the callee is a wrapper: a function of the module or one it imports (re-exports followed) whose body
+returns an async function calling the parameter it was given the function as. `ModuleReader` keeps the candidates,
+`NextModel.link` confirms them (`Wrapper.of`). `Wrapper`: `module()`, `fn()` the wrapper, `returned()` the async
+function, `call()` its call of the wrapped function, `clientArg(i)` whether parameter i of the wrapped function gets
+the caller's arguments (`action(user, ...args)`: not the user), `validated()` a schema parse in the wrapper.
+ServerActionWithoutAuth counts the action as checked when the wrapper checks the session (itself or through the
+helpers it calls); ServerActionWithoutValidation skips it when the wrapper parses a schema, else treats only the
+`clientArg` parameters as input. A wrapper given a member (`wrap(service.save)`), or one from a package, is no
+action the model sees.
+
 ### Test files
 
-`*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `e2e/` or `playwright/` are read
+`*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `e2e/` or `playwright/` (except
+App Router convention files under app/ and Pages Router files under pages/ in such a folder: `app/e2e/x/page.tsx` is
+a real route) are read
 (`isTest()`) but get no route and no role (SHARED, never entered from a client or server module), count in no nx_*
 measure nor in nx_routes_json, and `Analyzer` reports nothing in them.
 
@@ -121,7 +137,8 @@ a server module): `role()` is CLIENT, `reachedFromServer()` is true. Rules about
 ### Graph queries (`NextModel`)
 
 `modules()`, `module(path)`, `target(import)` (the module an import resolves to), `imported(module)` (non-type
-imports, resolved, in order), `importers(module)`, `reachable(start, enter)` (breadth first, `enter` decides whether
+imports, resolved, in order), `importers(module)`, `exportOf(module, name)` and `exportedFunction(module, name)` (re-exports followed),
+`function(module, localName)` (a top-level function or an imported one), `reachable(start, enter)` (breadth first, `enter` decides whether
 to go into a module), `clientModulesOf(route)`, `nextMajor(module)`, `hasNext()`, `apps()`, `skipped()`.
 
 ## Writing a rule

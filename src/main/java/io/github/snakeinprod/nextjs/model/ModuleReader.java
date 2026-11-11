@@ -160,12 +160,43 @@ final class ModuleReader {
     return a.line() != b.line() ? Integer.compare(a.line(), b.line()) : Integer.compare(a.column(), b.column());
   }
 
-  /** {@code export const runtime = 'edge'} */
+  /** {@code export const runtime = 'edge'}, or {@code runtime: 'nodejs'} in {@code export const config = {...}}. */
   private static String runtime(List<Token> t) {
     for (int i = 0; i + 4 < t.size(); i++) {
       if (t.get(i).isIdent("export") && t.get(i + 1).isIdent("const") && t.get(i + 2).isIdent("runtime") && t.get(i + 3).is("=")
         && t.get(i + 4).kind() == TokenKind.STRING) {
         return JsTrees.unquote(t.get(i + 4).text());
+      }
+      if (t.get(i).isIdent("export") && t.get(i + 1).isIdent("const") && t.get(i + 2).isIdent("config")) {
+        String r = configRuntime(t, i + 3);
+        if (r != null) {
+          return r;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** The top-level {@code runtime: '...'} of the object literal after {@code =} from {@code k} (a type may come first). */
+  private static String configRuntime(List<Token> t, int k) {
+    for (int depth = 0; k < t.size() && (depth > 0 || !t.get(k).is("=") && !t.get(k).is(";")); k++) {
+      depth += t.get(k).is("{") || t.get(k).is("(") || t.get(k).is("[") ? 1 : t.get(k).is("}") || t.get(k).is(")") || t.get(k).is("]") ? -1 : 0;
+    }
+    if (k + 1 >= t.size() || !t.get(k).is("=") || !t.get(k + 1).is("{")) {
+      return null;
+    }
+    int depth = 0;
+    for (int j = k + 1; j + 2 < t.size(); j++) {
+      Token x = t.get(j);
+      if (x.is("{") || x.is("(") || x.is("[")) {
+        depth++;
+      } else if (x.is("}") || x.is(")") || x.is("]")) {
+        if (--depth == 0) {
+          return null;
+        }
+      } else if (depth == 1 && (x.isIdent("runtime") || x.kind() == TokenKind.STRING && JsTrees.unquote(x.text()).equals("runtime"))
+        && t.get(j + 1).is(":") && t.get(j + 2).kind() == TokenKind.STRING) {
+        return JsTrees.unquote(t.get(j + 2).text());
       }
     }
     return null;

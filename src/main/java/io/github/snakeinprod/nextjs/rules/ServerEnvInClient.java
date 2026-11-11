@@ -20,7 +20,7 @@ import java.util.Set;
  * Client code should only read NEXT_PUBLIC_ environment variables: any other {@code process.env.X} is undefined in the
  * browser. Checks "use client" modules and modules only client modules import, inside a Next.js app. Silent for
  * modules that test {@code typeof window} / {@code typeof document} (code that knows where it runs), t3-env schemas,
- * names next.config declares under {@code env}, and every name when next.config uses DefinePlugin or a computed env.
+ * names next.config declares under {@code env}, a fallback to the NEXT_PUBLIC_ name ({@code process.env.NEXT_PUBLIC_X ?? process.env.X}), and every name when next.config uses DefinePlugin or a computed env.
  */
 public class ServerEnvInClient implements NextRule {
 
@@ -45,7 +45,8 @@ public class ServerEnvInClient implements NextRule {
 
   /**
    * The non-public env reads of a module that the browser bundle leaves undefined: none when the module guards with
-   * {@code typeof window}/{@code typeof document} or builds a t3-env schema, and none of the names next.config inlines.
+   * {@code typeof window}/{@code typeof document} or builds a t3-env schema, and none of the names next.config inlines
+   * or that fall back to their NEXT_PUBLIC_ name.
    * {@code cache} keeps the next.config env names per app directory.
    */
   static List<EnvRead> serverReads(NextModel model, Module m, Map<String, Set<String>> cache) {
@@ -60,11 +61,33 @@ public class ServerEnvInClient implements NextRule {
     List<EnvRead> out = new ArrayList<>();
     for (EnvRead e : m.envReads()) {
       String n = e.name();
-      if (!n.startsWith("NEXT_PUBLIC_") && !n.startsWith("__NEXT") && !BUILT_IN.contains(n) && !config.contains(n)) {
+      // process.env.NEXT_PUBLIC_X ?? process.env.X: code shared by both sides, the browser reads the public one
+      if (!n.startsWith("NEXT_PUBLIC_") && !n.startsWith("__NEXT") && !BUILT_IN.contains(n) && !config.contains(n)
+        && !publicFallback(m, e)) {
         out.add(e);
       }
     }
     return out;
+  }
+
+  /**
+   * {@code process.env.NEXT_PUBLIC_X ?? process.env.X} or {@code process.env.X || process.env.NEXT_PUBLIC_X} on one line:
+   * code shared by both sides, the browser gets the public name.
+   */
+  private static boolean publicFallback(Module m, EnvRead e) {
+    List<Token> t = m.file().tokens();
+    int at = t.indexOf(e.token());
+    for (EnvRead p : m.envReads()) {
+      if (p.name().equals("NEXT_PUBLIC_" + e.name()) && p.token().line() == e.token().line()) {
+        int other = t.indexOf(p.token());
+        for (int i = Math.min(at, other) + 1; at >= 0 && other >= 0 && i < Math.max(at, other); i++) {
+          if (t.get(i).is("??") || t.get(i).is("||")) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /** The directory of the Next.js app holding the module, or null. */

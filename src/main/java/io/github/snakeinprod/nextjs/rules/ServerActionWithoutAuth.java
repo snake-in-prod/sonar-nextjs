@@ -25,8 +25,8 @@ import java.util.regex.Pattern;
 /**
  * Server Actions that change data should check the session. An exported function of a "use server" module that
  * writes (a database write, a POST/PUT/PATCH/DELETE fetch without credentials, revalidatePath / revalidateTag) and never
- * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter
- * and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
+ * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter,
+ * guest cart, error monitoring and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
  * An action built with an action library is checked when its client middleware or procedure checks the session too.
  * {@link Flow} holds what the endpoint rules share.
  */
@@ -35,7 +35,9 @@ public class ServerActionWithoutAuth implements NextRule {
   /** Action or module names of flows that are public by design. */
   static final Pattern PUBLIC_ACTION = Pattern.compile("signin|signup|login|logout|signout|register|password|forgot|reset"
     + "|verif|confirm|subscribe|newsletter|waitlist|contact|feedback|captcha|turnstile|increment|view|track|visit|analytic"
-    + "|otp|magiclink|authenticate");
+    + "|otp|magiclink|authenticate|cart|basket|sentry|telemetry");
+  /** A getter that revalidates refreshes the cache after reading: only a database or fetch write counts. */
+  private static final Pattern GETTER = Pattern.compile("(get|fetch|list|find|load|read|search)[A-Z]");
   private static final Set<String> PUBLIC_CALLS = Set.of("signIn", "signUp", "signOut", "register", "createUserWithEmailAndPassword");
 
   private Flow flow;
@@ -55,7 +57,7 @@ public class ServerActionWithoutAuth implements NextRule {
         continue;
       }
       List<Chain> chains = Flow.chains(a.fn());
-      if (flow.writes(m, chains) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
+      if (flow.writes(m, chains, !GETTER.matcher(a.name().text()).lookingAt()) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
         && flow.session(m, a.fn()) == Flow.Check.NO && (a.builder() == null || flow.builder(m, a.builder()) == Flow.Check.NO)) {
         ctx.report(a.name(), "Check the session in \"" + a.name().text() + "\" before it changes data: anyone can call a Server Action.");
       }
@@ -87,17 +89,19 @@ public class ServerActionWithoutAuth implements NextRule {
       "updateManyAndReturn", "upsert", "delete", "deleteMany", "insert", "insertInto", "insertOne", "insertMany", "updateTable",
       "deleteFrom", "updateOne", "replaceOne", "deleteOne", "findOneAndUpdate", "findOneAndDelete", "findOneAndReplace",
       "findByIdAndUpdate", "findByIdAndDelete", "findByIdAndRemove", "bulkWrite", "bulkCreate", "destroy", "$executeRaw",
-      "$executeRawUnsafe", "transaction", "$transaction", "increment", "decrement", "save");
+      "$executeRawUnsafe", "increment", "decrement", "save");
+    /** Writes only when the transaction they run writes: {@code db.transaction(async (tx) => tx.select()...)} reads. */
+    private static final Set<String> TRANSACTIONS = Set.of("transaction", "$transaction");
     private static final Set<String> SQL_CALLS = Set.of("query", "execute", "$queryRaw", "$queryRawUnsafe", "unsafe", "run", "exec");
     private static final Pattern WRITE_SQL = Pattern.compile("(?is)^[`'\"]\\s*(insert|update|delete|replace|upsert|merge|truncate"
       + "|drop|alter)\\b.*");
     private static final Set<String> SESSION_CALLS = Set.of("auth", "getServerSession", "getServerAuthSession", "currentUser",
       "getUser", "getSession", "getAuth", "validateRequest", "getKindeServerSession", "getIronSession", "getToken", "protect",
-      "authorize", "authenticate", "getClaims", "getAccessToken", "session", "getServerUser", "withAuth");
+      "authorize", "authenticate", "getClaims", "getAccessToken", "session", "getServerUser", "withAuth", "unstable_update");
     private static final Pattern SESSION_CALL = Pattern.compile("(get|require|verify|check|validate|ensure|assert|fetch|load|is|has"
       + "|must|with|protect|authorize|authenticate)([A-Z][a-z0-9]*)*(Auth|Session|User|Viewer|Admin|Role|Roles|Permission"
-      + "|Permissions|Account|Member|Owner|Identity|Principal|Me|Logged|Signed|Authenticated|Authorized|Authed|Access)([A-Z][a-z0-9]*)*"
-      + "|auth([A-Z]\\w*)?|(current|session)([A-Z]\\w*)?");
+      + "|Permissions|Account|Member|Owner|Identity|Principal|Me|LoggedIn|SignedIn|Authenticated|Authorized|Authed|Access)([A-Z][a-z0-9]*)*"
+      + "|auth([A-Z]\\w*)?|current[A-Z]\\w*|session([A-Z]\\w*)?");
     private static final Pattern PATH_LIKE = Pattern.compile("[./~#].*|@/.*|(src|lib|app|server|utils|actions|services|helpers"
       + "|data|db|features|modules)/.*");
     private static final Set<String> FETCH_WRITES = Set.of("post", "put", "patch", "delete");
@@ -229,6 +233,11 @@ public class ServerActionWithoutAuth implements NextRule {
      * revalidateTag after an awaited call (a helper that wrote). Revalidation alone only refreshes the cache.
      */
     boolean writes(Module m, List<Chain> chains) {
+      return writes(m, chains, true);
+    }
+
+    /** {@link #writes(Module, List)}, revalidation after an awaited call counting only when {@code revalidation} is set. */
+    boolean writes(Module m, List<Chain> chains, boolean revalidation) {
       boolean revalidates = false;
       boolean awaits = false;
       for (Chain c : chains) {
@@ -241,7 +250,7 @@ public class ServerActionWithoutAuth implements NextRule {
           awaits |= JsTrees.isAwaited(c) && c.calls().size() > 0;
         }
       }
-      return revalidates && awaits;
+      return revalidation && revalidates && awaits;
     }
 
     private static boolean isDbWrite(Chain c) {
@@ -249,6 +258,14 @@ public class ServerActionWithoutAuth implements NextRule {
       for (int i = 1; i < names.size(); i++) {
         if (WRITES.contains(names.get(i))) {
           return true;
+        }
+        if (TRANSACTIONS.contains(names.get(i)) && c.callAfter(i) != null) {
+          List<Token> t = Nodes.tokens(c.callAfter(i).items().stream().flatMap(List::stream).toList());
+          for (int j = 1; j < t.size(); j++) {
+            if (t.get(j - 1).is(".") && WRITES.contains(t.get(j).text())) {
+              return true;
+            }
+          }
         }
       }
       if (isTemplate(c.after()) && WRITE_SQL.matcher(Nodes.leaf(c.after()).text()).matches()) {

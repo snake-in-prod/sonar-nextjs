@@ -76,6 +76,15 @@ export async function notifyBackend(id: string) {
   await fetch('https://api.example.com/notify', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
 }
 
+// compliant: the key in the query string is the credential the service checks
+export async function uploadCover(image: FormData) {
+  await fetch(`${process.env.UPLOAD_URL}?key=${process.env.UPLOAD_KEY}`, { method: 'POST', body: image });
+}
+
+export async function queuePost(id: string) { // Noncompliant
+  await fetch(`https://api.example.com/queue?id=${id}`, { method: 'POST' });
+}
+
 // compliant: a helper the model cannot see may check the session
 export async function pinPost(id: string) {
   await mystery();

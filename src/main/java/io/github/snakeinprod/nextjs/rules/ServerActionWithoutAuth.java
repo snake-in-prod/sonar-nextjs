@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
 
 /**
  * Server Actions that change data should check the session. An exported function of a "use server" module that
- * writes (a database write, a POST/PUT/PATCH/DELETE fetch without credentials, revalidatePath / revalidateTag) and never
+ * writes (a database write, a POST/PUT/PATCH/DELETE fetch without credentials in its headers or query string, revalidatePath / revalidateTag) and never
  * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter,
  * guest cart, error monitoring and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
  * An action built with an action library is checked when its client middleware or procedure checks the session too,
@@ -104,6 +104,7 @@ public class ServerActionWithoutAuth implements NextRule {
     private static final Pattern PATH_LIKE = Pattern.compile("[./~#].*|@/.*|(src|lib|app|server|utils|actions|services|helpers"
       + "|data|db|features|modules)/.*");
     private static final Set<String> FETCH_WRITES = Set.of("post", "put", "patch", "delete");
+    private static final Pattern URL_CREDENTIAL = Pattern.compile("(?i)[?&][a-z_-]*(key|token)=");
 
     private final NextModel model;
     private final Map<Module, Set<String>> db = new HashMap<>();
@@ -289,6 +290,10 @@ public class ServerActionWithoutAuth implements NextRule {
       }
       List<List<Node>> items = c.callAfter(0).items();
       if (items.size() < 2) {
+        return false;
+      }
+      // a key or token in the query string is a credential too: fetch(`${API}?key=${process.env.KEY}`, ...)
+      if (Nodes.tokens(items.get(0)).stream().anyMatch(u -> u.kind() == TokenKind.STRING && URL_CREDENTIAL.matcher(u.text()).find())) {
         return false;
       }
       List<Token> t = Nodes.tokens(items.get(1));

@@ -1,7 +1,7 @@
 <p>An exported function of a <code>"use server"</code> module is a Server Action: Next.js gives it an ID and accepts a
 POST request for it from anyone, whether or not a page of the app shows the form or button that calls it. An action
-that changes data (a database write, a POST, PUT, PATCH or DELETE <code>fetch</code>, or an awaited helper followed by
-<code>revalidatePath</code> or <code>revalidateTag</code>) without checking the session can be called by any visitor,
+that changes data (a database write, a POST, PUT, PATCH or DELETE <code>fetch</code> that sends no credentials in its
+headers or query string, or an awaited helper followed by <code>revalidatePath</code> or <code>revalidateTag</code>) without checking the session can be called by any visitor,
 signed in or not. An action that only revalidates refreshes the cache and changes no data.</p>
 <p>The rule follows the project helpers the action calls: a helper that calls <code>auth()</code>,
 <code>getServerSession</code>, <code>currentUser</code>, <code>getUser</code>, <code>getSession</code> or reads the

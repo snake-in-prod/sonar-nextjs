@@ -40,7 +40,7 @@ public class PersonalizedCachedFetch implements NextRule {
     if (caches.isEmpty()) {
       return;
     }
-    ValueFlow.Source source = (expr, tainted) -> references(expr, tainted.keySet(), requestApis) ? List.of() : null;
+    ValueFlow.Source source = (expr, tainted, locals) -> references(expr, tainted.keySet(), requestApis) ? List.of() : null;
     List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, source, Map.of()));
     for (Chain c : ctx.file().chains()) {
       Chain.Call call = c.callAfter(0);

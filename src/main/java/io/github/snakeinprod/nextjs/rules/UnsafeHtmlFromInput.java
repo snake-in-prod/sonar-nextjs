@@ -43,7 +43,7 @@ public class UnsafeHtmlFromInput implements NextRule {
             continue;
           }
           List<Node> value = item.size() > 2 && Nodes.isLeaf(item.get(1), ":") ? item.subList(2, item.size()) : item;
-          List<List<String>> keys = direct.keys(value, flow.tainted);
+          List<List<String>> keys = direct.keys(value, flow.tainted, flow.locals);
           if (keys != null && !flow.checked(keys, objects, false, false, s -> SANITIZER.matcher(s).matches())) {
             ctx.report(value.get(0).first(), value.get(value.size() - 1).last(),
               "Sanitize this HTML from the request or a response (DOMPurify, sanitize-html) or render it as text: "

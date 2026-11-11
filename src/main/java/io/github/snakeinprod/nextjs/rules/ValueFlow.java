@@ -32,7 +32,8 @@ final class ValueFlow {
 
   /** Keys of an expression when it is tainted, null when it is not. */
   interface Source {
-    List<List<String>> keys(List<Node> expr, Map<String, List<List<String>>> tainted);
+    /** {@code locals}: names declared in the scope with a plain {@code const name = ...}. */
+    List<List<String>> keys(List<Node> expr, Map<String, List<List<String>>> tainted, Set<String> locals);
   }
 
   private static final Set<String> DECLARE = Set.of("const", "let", "var");
@@ -43,11 +44,14 @@ final class ValueFlow {
   final Node.Group scope;
   final List<Token> tokens;
   final Map<String, List<List<String>>> tainted;
+  final Set<String> locals = new HashSet<>();
 
   ValueFlow(JsTrees.Fn fn, Source source, Map<String, List<List<String>>> seeds) {
     this.scope = new Node.Group(null, null, fn.container().children().subList(fn.start(), fn.end()));
     this.tokens = Nodes.tokens(scope);
-    this.tainted = taint(declarations(scope), source, seeds, parameters(scope));
+    List<Decl> decls = declarations(scope);
+    decls.stream().filter(Decl::plain).forEach(d -> locals.add(d.names().get(0).text()));
+    this.tainted = taint(decls, source, seeds, parameters(scope), locals);
   }
 
   /** Names bound by the parameters of the functions in the scope: values the flow cannot see. */
@@ -138,7 +142,8 @@ final class ValueFlow {
 
   // ---------------------------------------------------------------- declarations
 
-  record Decl(List<Token> names, List<Node> init) {
+  /** {@code plain}: the target is one name, not a pattern. */
+  record Decl(List<Token> names, List<Node> init, boolean plain) {
   }
 
   /** {@code const|let|var target [: Type] = init} and {@code name = init} statements, in any block of the scope. */
@@ -167,7 +172,7 @@ final class ValueFlow {
             break;
           }
           int end = expressionEnd(kids, k + 1);
-          out.add(new Decl(names, kids.subList(k + 1, end)));
+          out.add(new Decl(names, kids.subList(k + 1, end), kids.get(j) instanceof Node.Leaf));
           if (end < kids.size() && Nodes.isLeaf(kids.get(end), ",")) {
             j = end + 1;
           } else {
@@ -178,7 +183,7 @@ final class ValueFlow {
         && Nodes.isLeaf(kids.get(i + 1), "=") && (i == 0 || Nodes.isLeaf(kids.get(i - 1), ";")
         || kids.get(i - 1).last() != null && kids.get(i - 1).last().line() < l.token().line())) {
         int end = expressionEnd(kids, i + 2);
-        out.add(new Decl(List.of(l.token()), kids.subList(i + 2, end)));
+        out.add(new Decl(List.of(l.token()), kids.subList(i + 2, end), true));
       }
     }
     for (int i = 0; i < kids.size(); i++) {
@@ -271,7 +276,7 @@ final class ValueFlow {
   // ---------------------------------------------------------------- taint
 
   private static Map<String, List<List<String>>> taint(List<Decl> decls, Source source, Map<String, List<List<String>>> seeds,
-    Set<String> parameters) {
+    Set<String> parameters, Set<String> locals) {
     Map<String, List<Decl>> byName = new LinkedHashMap<>();
     for (Decl d : decls) {
       for (Token n : d.names()) {
@@ -290,7 +295,7 @@ final class ValueFlow {
         keys.add(List.of(e.getKey()));
         boolean all = true;
         for (Decl d : e.getValue()) {
-          List<List<String>> k = source.keys(d.init(), tainted);
+          List<List<String>> k = source.keys(d.init(), tainted, locals);
           if (k == null) {
             all = false;
             break;
@@ -483,32 +488,32 @@ final class ValueFlow {
     }
 
     @Override
-    public List<List<String>> keys(List<Node> expr, Map<String, List<List<String>>> tainted) {
+    public List<List<String>> keys(List<Node> expr, Map<String, List<List<String>>> tainted, Set<String> locals) {
       List<Node> e = trim(expr);
       if (e.isEmpty()) {
         return null;
       }
       List<List<Node>> parts = split(e, Set.of("??", "||"));
       if (parts.size() > 1) {
-        return keys(parts.get(0), tainted);
+        return keys(parts.get(0), tainted, locals);
       }
       parts = split(e, Set.of("+"));
       if (parts.size() > 1) {
         if (!html) {
-          return keys(parts.get(0), tainted);
+          return keys(parts.get(0), tainted, locals);
         }
         for (List<Node> p : parts) {
-          List<List<String>> k = keys(p, tainted);
+          List<List<String>> k = keys(p, tainted, locals);
           if (k != null) {
             return k;
           }
         }
         return null;
       }
-      return operand(e, tainted);
+      return operand(e, tainted, locals);
     }
 
-    private List<List<String>> operand(List<Node> e, Map<String, List<List<String>>> tainted) {
+    private List<List<String>> operand(List<Node> e, Map<String, List<List<String>>> tainted, Set<String> locals) {
       Token t = Nodes.leaf(e.get(0));
       if (e.size() == 1 && t != null && t.kind() == TokenKind.STRING) {
         Interpolations in = interpolations(t);
@@ -516,7 +521,7 @@ final class ValueFlow {
           if (!html && (i > 0 || !in.leading())) {
             break;
           }
-          List<List<String>> k = keys(in.parts().get(i), tainted);
+          List<List<String>> k = keys(in.parts().get(i), tainted, locals);
           if (k != null) {
             return k;
           }
@@ -525,18 +530,18 @@ final class ValueFlow {
       }
       if (e.size() == 3 && Nodes.isIdent(e.get(0), "new") && Nodes.isIdent(e.get(1), "URL") && e.get(2) instanceof Node.Group g
         && g.is("(") && !g.items().isEmpty()) {
-        return keys(g.items().get(0), tainted);
+        return keys(g.items().get(0), tainted, locals);
       }
       if (e.size() == 2 && t != null && WRAPPERS.contains(t.text()) && e.get(1) instanceof Node.Group g && g.is("(")
         && !g.items().isEmpty()) {
-        return keys(g.items().get(0), tainted);
+        return keys(g.items().get(0), tainted, locals);
       }
       List<List<String>> inherited = new ArrayList<>();
       boolean source;
       String root = null;
       List<String> names = new ArrayList<>();
       if (e.get(0) instanceof Node.Group g && g.is("(")) {
-        List<List<String>> inner = keys(g.children(), tainted);
+        List<List<String>> inner = keys(g.children(), tainted, locals);
         if (inner == null) {
           return null;
         }
@@ -584,8 +589,9 @@ final class ValueFlow {
       }
       for (int k = 0; k < names.size(); k++) {
         String n = names.get(k);
-        // a variable named formData is FormData when read with get(); formData.title is form state
-        source |= ROOTS.contains(n) && (route || !n.equals("params"))
+        // a variable named formData is FormData when read with get(); formData.title is form state; a local
+        // const params = usePathname() is not the route params
+        source |= ROOTS.contains(n) && (route && !(k == 0 && locals.contains(n)) || !n.equals("params"))
           && !(k == 0 && n.equals("formData") && (names.size() < 2 || !FORM_GETTERS.contains(names.get(1))));
       }
       source |= html && "fetch".equals(root);

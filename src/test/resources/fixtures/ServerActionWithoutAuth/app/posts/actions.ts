@@ -1,7 +1,7 @@
 'use server';
 
 import { cookies } from 'next/headers';
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { sql } from '@vercel/postgres';
 import { auth } from '@/auth';
 import { db } from '@/lib/db';
@@ -9,6 +9,7 @@ import { orm, posts } from '@/lib/orm';
 import { loadContext, slugify } from '@/lib/session';
 import { ensureContext } from '@/lib/guards';
 import { mystery } from '@/lib/missing';
+import { purgeAll } from '@/lib/writer';
 
 export async function deletePost(id: string) { // Noncompliant {{Check the session in "deletePost"}}
   await db.post.delete({ where: { id } });
@@ -22,8 +23,15 @@ export const publishPost = async (id: string) => { // Noncompliant
   await fetch('https://api.example.com/publish', { method: 'POST', body: JSON.stringify({ id }) });
 };
 
-export async function refreshPosts() { // Noncompliant
+export async function clearPosts() { // Noncompliant
+  await purgeAll();
   revalidatePath('/posts');
+}
+
+// compliant: revalidation alone refreshes the cache, it changes no data
+export async function refreshPosts(slug: string) {
+  revalidatePath(`/posts/${slug}`);
+  revalidateTag('posts', 'max');
 }
 
 export async function wipeComments(postId: string) { // Noncompliant

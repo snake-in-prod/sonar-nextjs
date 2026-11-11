@@ -39,7 +39,7 @@ public class OpenRedirect implements NextRule {
         ranges.add(call.args());
       }
     }
-    ValueFlow.Direct direct = new ValueFlow.Direct(false);
+    ValueFlow.Direct direct = new ValueFlow.Direct(false, m.route() != null);
     List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, direct, ValueFlow.Direct.formDataParams(f)));
     for (Chain.Call call : sinks) {
       ValueFlow flow = ValueFlow.at(flows, call.args().first());

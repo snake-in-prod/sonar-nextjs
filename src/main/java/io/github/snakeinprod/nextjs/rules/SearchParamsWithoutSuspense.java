@@ -110,10 +110,17 @@ public class SearchParamsWithoutSuspense implements NextRule {
   private String staticPageAround(NextModel model, Module entry) {
     String dir = dir(entry.path());
     boolean layout = entry.route().kind().equals("layout");
-    for (Module loading : model.modules()) {
-      Route r = loading.route();
+    for (Module other : model.modules()) {
+      Route r = other.route();
       if (r != null && r.router().equals("app") && r.kind().equals("loading")) {
-        String d = dir(loading.path());
+        String d = dir(other.path());
+        if (!layout && d.equals(dir) || under(dir, d)) {
+          return null;
+        }
+      }
+      // a layout above mentioning Suspense may wrap its children in one
+      if (r != null && r.router().equals("app") && r.kind().equals("layout") && other != entry && mentionsSuspense(other)) {
+        String d = dir(other.path());
         if (!layout && d.equals(dir) || under(dir, d)) {
           return null;
         }
@@ -218,8 +225,10 @@ public class SearchParamsWithoutSuspense implements NextRule {
     return out;
   }
 
-  private static boolean mentionsSuspense(Module m) {
-    return m.file().tokens().stream().anyMatch(t -> t.kind() == TokenKind.IDENT && t.text().contains("Suspense"));
+  private final Map<Module, Boolean> suspense = new HashMap<>();
+
+  private boolean mentionsSuspense(Module m) {
+    return suspense.computeIfAbsent(m, x -> x.file().tokens().stream().anyMatch(t -> t.kind() == TokenKind.IDENT && t.text().contains("Suspense")));
   }
 
   private static String dir(String path) {

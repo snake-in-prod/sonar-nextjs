@@ -21,7 +21,7 @@ public class UnsafeHtmlFromInput implements NextRule {
     if (ctx.file().tokens().stream().noneMatch(t -> t.isIdent("dangerouslySetInnerHTML"))) {
       return;
     }
-    ValueFlow.Direct direct = new ValueFlow.Direct(true);
+    ValueFlow.Direct direct = new ValueFlow.Direct(true, ctx.module().route() != null);
     for (ValueFlow flow : ValueFlow.flows(ctx.file().root(), f -> new ValueFlow(f, direct, ValueFlow.Direct.formDataParams(f)))) {
       List<Node.Group> objects = new ArrayList<>();
       Nodes.groups(flow.scope, g -> {

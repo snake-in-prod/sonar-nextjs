@@ -100,7 +100,13 @@ public final class Scan {
       public String read(String path) {
         Path p = root.resolve(path).normalize();
         try {
-          return p.startsWith(root) && Files.isRegularFile(p) ? Files.readString(p, StandardCharsets.UTF_8) : null;
+          if (!p.startsWith(root) || !Files.isRegularFile(p)) {
+            return null;
+          }
+          byte[] b = Files.readAllBytes(p);
+          // a UTF-16 file has a byte order mark, as SonarQube detects it
+          boolean utf16 = b.length > 1 && (b[0] == (byte) 0xFF && b[1] == (byte) 0xFE || b[0] == (byte) 0xFE && b[1] == (byte) 0xFF);
+          return new String(b, utf16 ? StandardCharsets.UTF_16 : StandardCharsets.UTF_8);
         } catch (IOException | UncheckedIOException e) {
           return null;
         }

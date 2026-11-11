@@ -101,12 +101,16 @@ public final class NextModel {
     return i.resolved() == null ? null : modules.get(i.resolved());
   }
 
-  /** The modules this one imports, type-only imports left out, in source order without repeats. */
+  /**
+   * The modules this one imports, in source order without repeats. Type-only imports are left out, and so are imports
+   * of names the target exports as types only ({@code import { User } from './schema'} for {@code export type User}):
+   * the compiler erases both.
+   */
   public List<Module> imported(Module m) {
     Set<Module> out = new LinkedHashSet<>();
     for (Import i : m.imports()) {
       Module t = i.typeOnly() ? null : target(i);
-      if (t != null) {
+      if (t != null && !(!i.reExport() && !i.names().isEmpty() && t.typeExports().containsAll(i.names().values()))) {
         out.add(t);
       }
     }
@@ -170,7 +174,8 @@ public final class NextModel {
     return skipped;
   }
 
-  private NextApp appOf(String path) {
+  /** The app holding the path: the nearest directory above it with a package.json declaring "next", or null. */
+  public NextApp appOf(String path) {
     NextApp best = null;
     for (NextApp a : apps) {
       if (path.startsWith(a.dir()) && (best == null || a.dir().length() > best.dir().length())) {

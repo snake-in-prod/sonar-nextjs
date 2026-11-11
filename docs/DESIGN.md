@@ -86,7 +86,8 @@ and interception markers `(.)` removed, private folders `_x` left out, `dynamic`
 ### Roles
 
 - CLIENT: a "use client" module, or one it reaches through imports. A "use server" module is not entered: a client
-  module importing it gets a reference to the actions, not their code. Type-only imports never count.
+  module importing it gets a reference to the actions, not their code. Type-only imports never count, nor imports
+  of names the target exports only as types (`import { User }` of an `export type User`): the compiler erases both.
 - SERVER: not client, and a server entry or reached from one through imports that stop at "use client" modules.
   Entries: App Router convention files, other app/ modules that are not client, route handlers, API routes,
   middleware, "use server" modules.

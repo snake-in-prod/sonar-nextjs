@@ -45,6 +45,9 @@ public class ServerActionWithoutAuth implements NextRule {
       return;
     }
     flow = Flow.of(flow, ctx.model());
+    if (!flow.appChecksSession(m)) {
+      return;
+    }
     for (ServerAction a : m.serverActions()) {
       if (a.inline() || isPublic(a.name().text())) {
         continue;
@@ -99,6 +102,7 @@ public class ServerActionWithoutAuth implements NextRule {
 
     private final NextModel model;
     private final Map<Module, Set<String>> db = new HashMap<>();
+    private final Map<String, Boolean> appAuth = new HashMap<>();
 
     private Flow(NextModel model) {
       this.model = model;
@@ -127,6 +131,14 @@ public class ServerActionWithoutAuth implements NextRule {
         }
       }
       return false;
+    }
+
+    /** Some module of the app holding m (the project when none) calls a session helper: an app without sign-in is public by design. */
+    boolean appChecksSession(Module m) {
+      NextModel.NextApp app = model.appOf(m.path());
+      String dir = app == null ? "" : app.dir();
+      return appAuth.computeIfAbsent(dir, d -> model.modules().stream()
+        .anyMatch(x -> x.path().startsWith(d) && x.file().chains().stream().anyMatch(c -> calls(c, Flow::isSessionCall))));
     }
 
     static boolean isSessionCall(String name) {
@@ -210,15 +222,24 @@ public class ServerActionWithoutAuth implements NextRule {
         || c.segments().size() == 1 && dbNames(m).contains(c.firstName()) && isTemplate(c.after());
     }
 
-    /** The chains write: a database write, a credential-less POST/PUT/PATCH/DELETE fetch, revalidatePath / revalidateTag. */
+    /**
+     * The chains write: a database write, a credential-less POST/PUT/PATCH/DELETE fetch, or revalidatePath /
+     * revalidateTag after an awaited call (a helper that wrote). Revalidation alone only refreshes the cache.
+     */
     boolean writes(Module m, List<Chain> chains) {
+      boolean revalidates = false;
+      boolean awaits = false;
       for (Chain c : chains) {
-        if (isDbCall(m, c) && isDbWrite(c) || isFetchWrite(c)
-          || c.segments().size() == 2 && c.endsWithCall() && (c.firstName().equals("revalidatePath") || c.firstName().equals("revalidateTag"))) {
+        if (isDbCall(m, c) && isDbWrite(c) || isFetchWrite(c)) {
           return true;
         }
+        if (c.segments().size() == 2 && c.endsWithCall() && (c.firstName().equals("revalidatePath") || c.firstName().equals("revalidateTag"))) {
+          revalidates = true;
+        } else {
+          awaits |= JsTrees.isAwaited(c) && c.calls().size() > 0;
+        }
       }
-      return false;
+      return revalidates && awaits;
     }
 
     private static boolean isDbWrite(Chain c) {

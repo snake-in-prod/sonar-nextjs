@@ -441,9 +441,12 @@ final class ValueFlow {
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
 
     private final boolean html;
+    private final boolean route;
 
-    Direct(boolean html) {
+    /** {@code route}: a Next.js convention file, where "params" are the route params; elsewhere a "params" is any argument. */
+    Direct(boolean html, boolean route) {
       this.html = html;
+      this.route = route;
     }
 
     /** Names of parameters typed FormData ({@code data: FormData}) in the scope: tainted from the start. */
@@ -558,7 +561,7 @@ final class ValueFlow {
           return null;
         }
       }
-      source |= names.stream().anyMatch(ROOTS::contains) || html && "fetch".equals(root);
+      source |= names.stream().anyMatch(n -> ROOTS.contains(n) && (route || !n.equals("params"))) || html && "fetch".equals(root);
       if (!source) {
         return null;
       }

@@ -78,6 +78,35 @@ public final class Module {
     return exports;
   }
 
+  private Set<String> typeExports;
+
+  /**
+   * Names exported by {@code export type X} or {@code export interface X} and not as a value too
+   * ({@code export const X = z.object(...)} beside {@code export type X}): an import of only these is erased.
+   */
+  public Set<String> typeExports() {
+    if (typeExports == null) {
+      Set<String> types = new java.util.HashSet<>();
+      Set<String> values = new java.util.HashSet<>();
+      List<Token> t = file.tokens();
+      for (int i = 1; i + 1 < t.size(); i++) {
+        if (!t.get(i - 1).isIdent("export") || t.get(i + 1).kind() != io.github.snakeinprod.nextjs.parse.TokenKind.IDENT) {
+          continue;
+        }
+        if (t.get(i).isIdent("type") || t.get(i).isIdent("interface")) {
+          types.add(t.get(i + 1).text());
+        } else if (VALUE_KEYWORDS.contains(t.get(i).text())) {
+          values.add(t.get(i + 1).text());
+        }
+      }
+      types.removeAll(values);
+      typeExports = Set.copyOf(types);
+    }
+    return typeExports;
+  }
+
+  private static final Set<String> VALUE_KEYWORDS = Set.of("const", "let", "var", "function", "class", "enum", "abstract");
+
   /**
    * Top-level named functions: {@code function f() {}}, {@code const f = () => ...}, {@code const f = function () {}},
    * exported or not, by name. An anonymous default export function is under "default".

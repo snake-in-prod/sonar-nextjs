@@ -63,6 +63,16 @@ export function Spread({ src, rest }: Props) {
   return <Image src={src} alt="" fill {...rest} />;
 }
 
+// compliant: an SVG or an unoptimized image is served as it is, there is no srcset to size
+export function Backdrop({ src }: Props) {
+  return (
+    <>
+      <Image src="/backgrounds/waves.svg" alt="" fill />
+      <Image src={src} alt="" fill unoptimized />
+    </>
+  );
+}
+
 // compliant: "fill" as a value, not the prop
 export function Text({ src }: Props) {
   return <Image src={src} alt="fill" width={10} height={10} style={{ objectFit: 'fill' }} />;

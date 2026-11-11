@@ -1,5 +1,6 @@
 package io.github.snakeinprod.nextjs.rules;
 
+import io.github.snakeinprod.nextjs.js.JsTrees;
 import io.github.snakeinprod.nextjs.model.Import;
 import io.github.snakeinprod.nextjs.parse.Node;
 import io.github.snakeinprod.nextjs.parse.Nodes;
@@ -7,6 +8,7 @@ import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -66,7 +68,10 @@ public class ImageFillWithoutSizes implements NextRule {
       } else {
         k++;
       }
-      if (attr.is("sizes")) {
+      // an image served as it is (unoptimized, or an SVG, which next/image never resizes) has no srcset to size
+      Token literal = value == null ? null : Nodes.leaf(value);
+      if (attr.is("sizes") || attr.is("unoptimized")
+        || attr.is("src") && literal != null && literal.kind() == TokenKind.STRING && JsTrees.unquote(literal.text()).toLowerCase(Locale.ROOT).endsWith(".svg")) {
         return false;
       }
       if (attr.is("fill")) {

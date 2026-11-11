@@ -1,0 +1,1 @@
+{ "name": "guestbook", "dependencies": { "next": "15.1.0", "postgres": "3.4.0" } }

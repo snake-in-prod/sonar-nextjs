@@ -44,7 +44,7 @@ public class OpenRedirect implements NextRule {
     for (Chain.Call call : sinks) {
       ValueFlow flow = ValueFlow.at(flows, call.args().first());
       List<Node> target = call.items().get(0);
-      List<List<String>> keys = flow == null ? null : direct.keys(target, flow.tainted);
+      List<List<String>> keys = flow == null ? null : direct.keys(target, flow.tainted, flow.locals);
       if (keys != null && !flow.checked(keys, ranges, true, true, s -> CHECK.matcher(s).matches())) {
         ctx.report(target.get(0).first(), target.get(target.size() - 1).last(),
           "Check this redirect target from the request against an allow-list or the same origin: it can send users to any site.");

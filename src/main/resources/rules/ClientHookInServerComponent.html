@@ -1,0 +1,45 @@
+<p>A module under <code>app/</code> without <code>"use client"</code>, rendered on the server, calls a client hook:
+<code>useState</code>, <code>useEffect</code>, <code>useReducer</code>, <code>useRef</code>, <code>useContext</code>,
+<code>useLayoutEffect</code>, <code>useTransition</code> and the other state and effect hooks of <code>react</code>,
+<code>useFormStatus</code> of <code>react-dom</code>, or <code>useRouter</code>, <code>usePathname</code>,
+<code>useSearchParams</code>, <code>useParams</code> of <code>next/navigation</code>.</p>
+<h2>Why is this an issue?</h2>
+<p>Modules of the App Router are server components unless they, or a module importing them, start with
+<code>"use client"</code>. Server components render once on the server, without state, effects or browser context:
+Next.js stops the build with "This React hook only works in a Client Component", or the page fails when it renders.</p>
+<p>The rule checks App Router convention files and the <code>app/</code> modules a server module imports. A module
+reached only from client components is a client component and is not reported. <code>use</code>,
+<code>useId</code>, <code>useMemo</code> and <code>useCallback</code> work in server components. One issue per module,
+on the first call.</p>
+<h2>How to fix it</h2>
+<p>Add <code>"use client"</code> at the top of the module, or move the interactive part into a small client
+component and render that from the server component.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+// app/page.tsx
+import { useState } from 'react';
+
+export default function Page() {
+  const [open, setOpen] = useState(false); // Noncompliant
+  return &lt;button onClick={() =&gt; setOpen(!open)}&gt;Menu&lt;/button&gt;;
+}
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+// app/page.tsx
+import MenuButton from './MenuButton';
+
+export default function Page() {
+  return &lt;MenuButton /&gt;;
+}
+
+// app/MenuButton.tsx
+'use client';
+
+import { useState } from 'react';
+
+export default function MenuButton() {
+  const [open, setOpen] = useState(false);
+  return &lt;button onClick={() =&gt; setOpen(!open)}&gt;Menu&lt;/button&gt;;
+}
+</pre>

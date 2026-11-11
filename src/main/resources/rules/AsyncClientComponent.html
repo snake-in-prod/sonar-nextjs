@@ -1,0 +1,36 @@
+<p>The default export of a <code>"use client"</code> module is an <code>async</code> component.</p>
+<h2>Why is this an issue?</h2>
+<p>Only server components can be async functions. React renders client components synchronously, in the browser and
+during server rendering: an async client component returns a promise instead of elements, which fails with an error
+or renders nothing, and refetches on every render.</p>
+<p>The rule reports the async default export of a <code>"use client"</code> file when it is a component: a PascalCase
+name, a page, layout or other App Router convention file, or an anonymous export in a .jsx or .tsx file. A lower-case
+async default export such as a data fetcher is left alone.</p>
+<h2>How to fix it</h2>
+<p>Fetch the data in a server component and pass it as props, or remove <code>"use client"</code> when the component
+needs no browser API. In a client component, load data in an effect, with a data fetching hook, or with
+<code>use()</code> on a promise passed from the server.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+'use client';
+
+export default async function Profile({ id }) { // Noncompliant
+  const user = await fetch(`/api/users/${id}`).then((r) =&gt; r.json());
+  return &lt;p&gt;{user.name}&lt;/p&gt;;
+}
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+// app/profile/page.tsx, a server component
+export default async function Page() {
+  const user = await getUser();
+  return &lt;Profile user={user} /&gt;;
+}
+
+// Profile.tsx
+'use client';
+
+export default function Profile({ user }) {
+  return &lt;p&gt;{user.name}&lt;/p&gt;;
+}
+</pre>

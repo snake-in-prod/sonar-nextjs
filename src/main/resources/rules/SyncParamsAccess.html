@@ -1,0 +1,36 @@
+<p>A page, layout, <code>default.js</code>, <code>generateMetadata</code>, <code>generateViewport</code> or route
+handler of the App Router reads <code>params</code> or <code>searchParams</code> without awaiting them, in an app
+whose package.json declares Next.js 15 or later.</p>
+<h2>Why is this an issue?</h2>
+<p>Since Next.js 15, <code>params</code> and <code>searchParams</code> are promises. Reading a property of the promise
+(<code>params.slug</code>, <code>const { slug } = params</code>, <code>{ params: { slug } }</code> in the signature)
+works in Next.js 15 only through a deprecated compatibility layer that logs warnings, and gives
+<code>undefined</code> once it is removed. Typing them as plain objects hides the problem from the compiler.</p>
+<p>Awaiting the value, unwrapping it with <code>React.use</code>, calling <code>then</code>, or passing it on to
+another function is fine. One issue per name and function, on the first read.</p>
+<h2>How to fix it</h2>
+<p>Make the component or function async and <code>await</code> the promise, or call <code>use(params)</code> in a
+client component. Type the props as <code>Promise&lt;...&gt;</code>. The official codemod
+<code>next-async-request-api</code> rewrites most cases.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+export default function Page({ params }: { params: { slug: string } }) {
+  return &lt;h1&gt;{params.slug}&lt;/h1&gt;; // Noncompliant
+}
+
+export async function GET(req: Request, { params }) {
+  return Response.json(await getItem(params.id)); // Noncompliant
+}
+</pre>
+<h2>Compliant solution</h2>
+<pre>
+export default async function Page({ params }: { params: Promise&lt;{ slug: string }&gt; }) {
+  const { slug } = await params;
+  return &lt;h1&gt;{slug}&lt;/h1&gt;;
+}
+
+export async function GET(req: Request, { params }) {
+  const { id } = await params;
+  return Response.json(await getItem(id));
+}
+</pre>

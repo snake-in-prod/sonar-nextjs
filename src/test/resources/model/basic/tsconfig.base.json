@@ -1,0 +1,6 @@
+{
+  "compilerOptions": {
+    /* paths relative to this file */
+    "paths": { "@/*": ["./src/*"] }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  // compiler options come from the base config
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "strict": true,
+  },
+}

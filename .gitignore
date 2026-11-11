@@ -5,3 +5,4 @@ target/
 .scannerwork/
 .claude/
 node_modules/
+!src/test/resources/**/node_modules/

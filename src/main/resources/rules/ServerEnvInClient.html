@@ -1,0 +1,28 @@
+<p>This rule reports <code>process.env.X</code> reads in client code (a <code>"use client"</code> module, or a module
+only client modules import) where <code>X</code> does not start with <code>NEXT_PUBLIC_</code>. <code>NODE_ENV</code>,
+the variables Next.js defines itself and the names declared under <code>env</code> in next.config are allowed.
+Modules that check <code>typeof window</code> and t3-env schemas are not reported.</p>
+<h2>Why is this an issue?</h2>
+<p>Next.js replaces <code>process.env.NEXT_PUBLIC_*</code> with its value when it builds the browser bundle. Every
+other variable stays on the server: in the browser the read is <code>undefined</code>. The component works during
+server rendering, then renders differently or fails after hydration, and the bug only shows in the browser.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+'use client';
+
+export function Map() {
+  const key = process.env.MAPS_KEY; // Noncompliant: undefined in the browser
+  return &lt;MapView apiKey={key} /&gt;;
+}
+</pre>
+<h2>Compliant solution</h2>
+<p>When the value may be public, rename the variable with the <code>NEXT_PUBLIC_</code> prefix. When it is a secret,
+read it on the server (server component, Server Action, route handler) and pass only what the client needs.</p>
+<pre>
+'use client';
+
+export function Map() {
+  const key = process.env.NEXT_PUBLIC_MAPS_KEY;
+  return &lt;MapView apiKey={key} /&gt;;
+}
+</pre>

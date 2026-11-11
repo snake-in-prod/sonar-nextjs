@@ -1,0 +1,58 @@
+<p>A <code>"use client"</code> module and everything it imports are bundled for the browser. This rule reports an import
+in a client module that brings server code into that bundle, directly or through modules without a directive:</p>
+<ul>
+  <li>a module that imports <code>server-only</code>;</li>
+  <li>a Node.js built-in the browser has no fallback for (<code>fs</code>, <code>child_process</code>, <code>net</code>,
+    <code>worker_threads</code>..., with or without <code>node:</code>);</li>
+  <li>a database client (<code>PrismaClient</code>, drizzle drivers, <code>pg</code>, <code>mysql2</code>,
+    <code>mongodb</code>, <code>@vercel/postgres</code>, <code>kysely</code>...);</li>
+  <li>in the imported module itself: Node.js crypto APIs such as <code>createHmac</code> or <code>createCipheriv</code>,
+    or a read of a server environment variable whose name says it holds a secret or a database location.</li>
+</ul>
+<p>Imports used for types only, <code>require()</code>, <code>import()</code> and imports of <code>"use server"</code>
+modules are not reported.</p>
+<h2>Why is this an issue?</h2>
+<p>Server code in the browser bundle either breaks the build ("Module not found: Can't resolve 'fs'", "This module
+cannot be imported from a Client Component module") or ships server logic, queries and the names of secrets to every
+visitor. The browser cannot open a database connection or read the server's environment, so the code cannot work
+there anyway.</p>
+<h2>Noncompliant code example</h2>
+<pre>
+// lib/db.ts
+import { Pool } from 'pg';
+export const db = new Pool();
+
+// components/Orders.tsx
+'use client';
+import { db } from '@/lib/db'; // Noncompliant: brings the database client "pg" into the browser bundle
+
+export function Orders() {
+  const [rows, setRows] = useState([]);
+  useEffect(() =&gt; { db.query('select * from orders').then(r =&gt; setRows(r.rows)); }, []);
+  return &lt;List rows={rows} /&gt;;
+}
+</pre>
+<h2>Compliant solution</h2>
+<p>Read the data in a server component (or a Server Action) and pass it to the client component as props. Mark server
+modules with <code>import 'server-only'</code> so that such a mistake fails the build early.</p>
+<pre>
+// lib/db.ts
+import 'server-only';
+import { Pool } from 'pg';
+export const db = new Pool();
+
+// app/orders/page.tsx (server component)
+import { db } from '@/lib/db';
+import { Orders } from '@/components/Orders';
+
+export default async function Page() {
+  const { rows } = await db.query('select * from orders');
+  return &lt;Orders rows={rows} /&gt;;
+}
+
+// components/Orders.tsx
+'use client';
+export function Orders({ rows }) {
+  return &lt;List rows={rows} /&gt;;
+}
+</pre>

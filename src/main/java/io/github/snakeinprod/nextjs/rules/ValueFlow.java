@@ -43,6 +43,7 @@ final class ValueFlow {
     "void", "delete", "yield", "return", "throw", "keyof");
 
   final Node.Group scope;
+  final Source source;
   final List<Token> tokens;
   final Map<String, List<List<String>>> tainted;
   final Set<String> locals = new HashSet<>();
@@ -53,11 +54,16 @@ final class ValueFlow {
 
   /** {@code state}: follow React state through its setter calls. */
   ValueFlow(JsTrees.Fn fn, Source source, Map<String, List<List<String>>> seeds, boolean state) {
-    this.scope = new Node.Group(null, null, fn.container().children().subList(fn.start(), fn.end()));
+    this.scope = scopeOf(fn);
+    this.source = source;
     this.tokens = Nodes.tokens(scope);
     List<Decl> decls = state ? state(scope, declarations(scope)) : declarations(scope);
     decls.stream().filter(Decl::plain).forEach(d -> locals.add(d.names().get(0).text()));
     this.tainted = taint(decls, source, seeds, parameters(scope), locals);
+  }
+
+  static Node.Group scopeOf(JsTrees.Fn fn) {
+    return new Node.Group(null, null, fn.container().children().subList(fn.start(), fn.end()));
   }
 
   /** Names bound by the parameters of the functions in the scope: values the flow cannot see. */
@@ -524,16 +530,31 @@ final class ValueFlow {
       "fetch");
     static final Set<String> PASSTHROUGH = Set.of("toString", "trim", "toLowerCase", "toUpperCase", "valueOf", "at");
     private static final Set<String> OBJECTS = Set.of("fetch", "json", "text", "then", "query");
+    /** The request parameter of a route handler or API route: {@code request.json()}, {@code req.body}. */
+    private static final Set<String> REQUESTS = Set.of("req", "request");
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
     private static final Set<String> FORM_GETTERS = Set.of("get", "getAll");
 
     private final boolean html;
     private final boolean route;
+    private final boolean body;
+    private final Set<String> objects;
 
     /** {@code route}: a Next.js convention file, where "params" are the route params; elsewhere a "params" is any argument. */
     Direct(boolean html, boolean route) {
+      this(html, route, false, Set.of());
+    }
+
+    /**
+     * {@code body}: an endpoint module, where {@code await req.json()} and {@code req.body} of a parameter named req or
+     * request are the request body; {@code objects}: parameters whose fields are inputs ({@code data.callbackUrl},
+     * {@code data.get('next')}) while the parameter itself is not (a Server Action's {@code path: string}).
+     */
+    Direct(boolean html, boolean route, boolean body, Set<String> objects) {
       this.html = html;
       this.route = route;
+      this.body = body;
+      this.objects = objects;
     }
 
     /** Names of parameters typed FormData ({@code data: FormData}) in the scope: tainted from the start. */
@@ -658,6 +679,11 @@ final class ValueFlow {
       // the query of a Pages Router request or router: req.query.next, router.query.returnUrl
       source |= names.size() > 1 && names.subList(1, names.size()).contains("query");
       source |= html && "fetch".equals(root);
+      // the body of a request: await request.json(), req.body.next
+      source |= body && root != null && REQUESTS.contains(root) && !locals.contains(root) && names.size() > 1
+        && (names.get(1).equals("body") || names.get(1).equals("json"));
+      // a field of a Server Action's object parameter: data.callbackUrl, data.get('next')
+      source |= root != null && objects.contains(root) && !locals.contains(root) && names.size() > 1;
       if (!source) {
         return null;
       }
@@ -665,7 +691,7 @@ final class ValueFlow {
       List<List<String>> keys = keyEnd == 1 ? inherited : new ArrayList<>();
       // a whole request object or response (searchParams, request.formData(), res.json()) is no key: a check on one
       // of its properties checks nothing about another
-      if (lastKeyName != null && !ROOTS.contains(lastKeyName) && !OBJECTS.contains(lastKeyName)
+      if (lastKeyName != null && !ROOTS.contains(lastKeyName) && !OBJECTS.contains(lastKeyName) && !(body && lastKeyName.equals("body"))
         && (keyEnd > 1 || tainted.containsKey(root))) {
         List<String> key = new ArrayList<>();
         for (Token k : Nodes.tokens(e.subList(0, keyEnd))) {

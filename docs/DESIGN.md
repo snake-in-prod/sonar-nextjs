@@ -147,7 +147,13 @@ name no parameter of the action nor a local built from one without an await; del
 OpenRedirect: in a Pages Router API route, or a module importing `NextApiResponse` from next, `res.redirect(url)`,
 `res.redirect(status, url)` and the Location of `res.writeHead(status, { Location: url })` are sinks too. A
 comparison with `process.env.X` before the sink (`req.query.secret !== process.env.PREVIEW_SECRET`) is a secret gate:
-silent.
+silent. The request body is a source in route handlers, API routes and modules importing `NextApiResponse`:
+`await request.json()` and `req.body` of a parameter named `req` or `request` (fields and destructured names too). In a
+Server Action every parameter the client fills (for a wrapped action its `clientArg` ones; for an action library
+handler `parsedInput`, `clientInput`, `input`) is an input: a destructured field (`{ callbackUrl }`), a field or
+`.get()` of a plain parameter (`values.callbackUrl`, `data.get('next')`) and names destructured from it in the body,
+but not the plain parameter itself (`go(path: string)` is called with fixed paths). A value parsed by a schema
+(`schema.safeParse(values).data.next`) is not followed.
 
 ### Test files
 

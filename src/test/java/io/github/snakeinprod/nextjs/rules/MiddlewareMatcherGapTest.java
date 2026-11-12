@@ -40,6 +40,21 @@ class MiddlewareMatcherGapTest {
   }
 
   @Test
+  void authorized_callback_deciding_by_pathname() {
+    RuleVerifier.verify("MiddlewareMatcherGapAuthorized", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void with_auth_callback_with_a_list_of_protected_routes() {
+    RuleVerifier.verify("MiddlewareMatcherGapAuthorizedWithAuth", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void authorized_callback_denying_everywhere_not_understood_or_ignored() {
+    RuleVerifier.verify("MiddlewareMatcherGapAuthorizedCovered", new MiddlewareMatcherGap());
+  }
+
+  @Test
   void next_matcher_semantics() {
     assertThat(covers("/dashboard/:path*", "/dashboard")).isTrue();
     assertThat(covers("/dashboard/:path*", "/dashboard/a/b")).isTrue();

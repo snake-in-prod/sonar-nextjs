@@ -1,0 +1,1 @@
+{ "name": "v4", "dependencies": { "next": "15.0.0", "next-auth": "5.0.0" } }

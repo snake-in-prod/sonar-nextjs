@@ -130,9 +130,23 @@ MiddlewareMatcherGap reads `config.matcher` as path-to-regexp (`toRegex`, the wa
 Clerk, `const isProtected = createRouteMatcher([...])` used only as `if (isProtected(req)) { auth.protect() }` (or
 `redirectToSignIn`, or a redirect to a sign-in path): a route is guarded when both match it. A negated route matcher
 (`!isPublic(req)`, a list of public routes), a protect outside an `if` on one route matcher, or a list that is not
-literal leaves the middleware out. Routes left out are reported only when they can show or change something: not a
-placeholder page (no call or await of its own, no imported module that fetches or queries), not a sign-in page, not a
-route handler exporting no method or only GET under settings alone.
+literal leaves the middleware out. For next-auth, an `authorized` callback that reads the pathname decides as well
+(`AuthorizedCallback`): Auth.js v5's `callbacks.authorized` in the config the middleware exports plainly
+(`export { auth as middleware }`, `export default auth`, `export default NextAuth(authConfig).auth`; with a function
+of its own, `auth((req) => ...)`, the callback's false redirects nothing and is not followed), found in the middleware
+or the modules it imports, two levels deep, and next-auth 4's `withAuth({ callbacks: { authorized } })` (unless its
+middleware function redirects or answers itself). The callback is run for a visitor without a session on each
+protected-looking URL (`[x]` as "x1"): `const`, `if` / `else`, `return`, ternaries, `&& || ?? ! + === !==`,
+`startsWith` / `endsWith` / `includes`, arrays of literals with `some` / `every` / `includes`, template literals of
+names, literal constants of the module or imported from a project module; `false`, a falsy value, a redirect or a
+JSON response turn the visitor away. A route is guarded when the matcher covers it and the callback turns the visitor
+away. Anything else (a regular expression, a helper call, `await`, the request's headers or cookies) on any of the
+app's protected-looking routes and the callback is not followed: the matcher alone decides, as without it. Routes the
+callback lets through are reported only when it guards at least one route, and a page among them only when it loads
+or changes data (awaits, or imports a module that fetches or awaits): sections left out of the callback are often
+stubs. Routes left out are reported only when they can show or change something: not a
+placeholder page (no call or await of its own, no imported module that fetches or queries), not a sign-in page (also
+the `signIn` page of the callback's config), not a route handler exporting no method or only GET under settings alone.
 
 ### Rule notes
 

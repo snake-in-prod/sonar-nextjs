@@ -47,6 +47,10 @@ extend "Next.js".
 | SearchParamsWithoutSuspense | Bug | Minor | no |
 | ImageFillWithoutSizes | Code smell | Minor | no |
 
+MiddlewareMatcherGap follows `config.matcher`, Clerk's `createRouteMatcher` and next-auth's `authorized` callback
+when it decides by pathname (`nextUrl.pathname.startsWith('/dashboard')`, lists of prefixes); a callback it does not
+follow leaves the matcher alone to decide.
+
 ## Measures
 
 nx_routes, nx_client_modules, nx_server_modules, nx_shared_modules, nx_client_ratio, nx_server_actions,

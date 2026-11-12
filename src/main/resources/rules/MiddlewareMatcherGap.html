@@ -1,7 +1,12 @@
 <p>A middleware (<code>middleware.ts</code>, or <code>proxy.ts</code> in Next.js 16) that checks the session runs only
 for the paths its <code>config.matcher</code> matches. A Clerk middleware written as
 <code>if (isProtectedRoute(req)) await auth.protect()</code> protects only the paths its <code>createRouteMatcher</code>
-lists; the issue is then reported on that list. Pages and route handlers under <code>dashboard</code>,
+lists; the issue is then reported on that list. A next-auth middleware whose <code>authorized</code> callback decides by
+pathname (Auth.js v5's <code>callbacks.authorized</code> with <code>export { auth as middleware }</code>, or
+<code>withAuth({ callbacks: { authorized } })</code>) protects only the routes for which the callback turns a visitor
+without a session away (<code>nextUrl.pathname.startsWith('/dashboard')</code>, lists of prefixes with
+<code>some</code> or <code>includes</code>); a callback the analysis does not follow (a regular expression, a helper
+call) leaves the matcher alone to decide. Pages and route handlers under <code>dashboard</code>,
 <code>admin</code>, <code>settings</code> or <code>account</code> that the matcher leaves out, and that check nothing
 themselves, are open to anyone. The issue is reported on the matcher and lists the routes left out.</p>
 <p>A route checks itself with a session call (<code>auth()</code>, <code>getServerSession</code>,
@@ -26,9 +31,27 @@ negative lookaheads such as <code>/((?!api|_next/static).*)</code>; an entry wit
 export { auth as middleware } from '@/auth';
 export const config = { matcher: ['/dashboard/:path*'] }; // Noncompliant: app/settings/page.tsx checks nothing
 </pre>
+<pre>
+// auth.config.ts, with export { auth as middleware } and a matcher covering everything
+callbacks: {
+  authorized({ auth, request: { nextUrl } }) {
+    if (nextUrl.pathname.startsWith('/dashboard')) return !!auth?.user; // app/settings/page.tsx is let through
+    return true;
+  },
+},
+</pre>
 <h2>Compliant solution</h2>
 <pre>
 // middleware.ts
 export { auth as middleware } from '@/auth';
 export const config = { matcher: ['/dashboard/:path*', '/settings/:path*'] };
+</pre>
+<pre>
+// auth.config.ts
+callbacks: {
+  authorized({ auth, request: { nextUrl } }) {
+    const isProtected = ['/dashboard', '/settings'].some((p) =&gt; nextUrl.pathname.startsWith(p));
+    return isProtected ? !!auth?.user : true;
+  },
+},
 </pre>

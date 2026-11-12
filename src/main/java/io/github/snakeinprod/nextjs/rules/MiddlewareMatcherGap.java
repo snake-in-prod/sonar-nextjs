@@ -32,6 +32,9 @@ import java.util.regex.PatternSyntaxException;
  * exporting no method or only GET under settings alone (public site settings). With Clerk's
  * {@code if (isProtected(req)) auth.protect()} the routes of that createRouteMatcher are the protected ones (within
  * config.matcher); a negated or public route matcher, or a protect outside such an if, makes the middleware skipped.
+ * A next-auth {@code authorized} callback deciding by pathname ({@link AuthorizedCallback}) narrows the matcher to the
+ * routes it turns a visitor without a session away from; routes it lets through are reported when it guards one at
+ * least and, for pages, when they load or change data.
  * Reported once per middleware, on the matcher, when the matcher
  * covers at least one protected-looking route (it is meant as a guard). Matchers follow Next.js semantics
  * (path-to-regexp: {@code :p}, {@code :p*}, {@code :p+}, {@code :p?}, {@code (regex)}); a matcher that is not literal
@@ -67,7 +70,18 @@ public class MiddlewareMatcherGap implements NextRule {
     List<String> sources = at == null ? null : sources(mw, at);
     List<Pattern> patterns = sources == null ? null : compile(sources);
     RouteMatcher clerk = RouteMatcher.of(mw);
-    if (clerk == RouteMatcher.UNCLEAR || clerk == null && patterns == null) {
+    NextModel model = ctx.model();
+    NextModel.NextApp app = model.appOf(mw.path());
+    // next-auth's authorized callback deciding by pathname: protected where it turns a visitor without a session away
+    AuthorizedCallback callback = clerk == null && (at == null || patterns != null) ? AuthorizedCallback.of(model, mw) : null;
+    for (Module m : callback == null ? List.<Module>of() : model.modules()) {
+      Route r = m.route();
+      if (r != null && r.isRoute() && r.url() != null && model.appOf(m.path()) == app && looksProtected(r.url()) && callback.denies(r.url()) == null) {
+        callback = null;
+        break;
+      }
+    }
+    if (clerk == RouteMatcher.UNCLEAR || clerk == null && patterns == null && callback == null) {
       return;
     }
     List<Pattern> guarded = clerk == null ? null : compile(clerk.sources);
@@ -79,31 +93,46 @@ public class MiddlewareMatcherGap implements NextRule {
       at = clerk.at;
       sources = sources == null || patterns == null ? clerk.sources : java.util.stream.Stream.concat(sources.stream(), clerk.sources.stream()).toList();
     }
+    if (callback != null && at == null) {
+      at = callback.at;
+      sources = List.of();
+    }
     flow = ServerActionWithoutAuth.Flow.of(flow, ctx.model());
-    NextModel model = ctx.model();
-    NextModel.NextApp app = model.appOf(mw.path());
     List<String> words = new ArrayList<>(new LinkedHashSet<>(sources.stream().flatMap(s -> WORD.matcher(s).results().map(java.util.regex.MatchResult::group)).toList()));
+    // guards: the matcher (and route matcher) covers a protected-looking route; byCallback: the callback turns a visitor
+    // away from one of them. Routes the matcher leaves out need the first, routes the callback lets through the second.
     boolean guards = (clerk == null ? sources : clerk.sources).stream().anyMatch(MiddlewareMatcherGap::looksProtected);
+    boolean byCallback = false;
     Set<String> signIn = signInPages(mw);
-    Set<String> open = new TreeSet<>();
+    if (callback != null) {
+      signIn.addAll(signInPages(callback.module));
+    }
+    Set<String> outside = new TreeSet<>();
+    Set<String> allowed = new TreeSet<>();
     for (Module m : model.modules()) {
       Route r = m.route();
       if (r == null || !r.isRoute() || r.url() == null || model.appOf(m.path()) != app || !looksProtected(r.url())) {
         continue;
       }
-      if ((patterns == null || covered(patterns, r.url(), words)) && (guarded == null || covered(guarded, r.url(), words))) {
-        guards = true;
-      } else if (!protects(model, m) && shows(model, m) && !signIn.contains(r.url())) {
-        open.add(r.url());
+      boolean in = (patterns == null || covered(patterns, r.url(), words)) && (guarded == null || covered(guarded, r.url(), words));
+      boolean denied = in && (callback == null || callback.denies(r.url()));
+      guards |= in;
+      byCallback |= denied && callback != null;
+      // inside the matcher a page must load or change data: a section left out of the callback is often a stub
+      if (!denied && !protects(model, m) && shows(model, m, in) && !signIn.contains(r.url())) {
+        (in ? allowed : outside).add(r.url());
       }
     }
-    if (guards && !open.isEmpty()) {
+    Set<String> open = new TreeSet<>(guards ? outside : Set.of());
+    open.addAll(byCallback ? allowed : Set.of());
+    if (!open.isEmpty()) {
+      boolean cb = byCallback && !allowed.isEmpty();
       List<String> list = new ArrayList<>(open);
       String shown = String.join(", ", list.subList(0, Math.min(LISTED, list.size())))
         + (list.size() > LISTED ? " and " + (list.size() - LISTED) + " more" : "");
-      ctx.report(at, "This middleware checks the session but its matcher leaves out " + list.size()
-        + (list.size() == 1 ? " route that checks" : " routes that check") + " nothing themselves (" + shown
-        + "): add them to the matcher or check the session in them.");
+      ctx.report(at, "This middleware checks the session but its " + (cb ? "matcher and authorized callback leave" : "matcher leaves")
+        + " out " + list.size() + (list.size() == 1 ? " route that checks" : " routes that check") + " nothing themselves (" + shown
+        + "): " + (cb ? "protect them in the callback" : "add them to the matcher") + " or check the session in them.");
     }
   }
 
@@ -127,10 +156,10 @@ public class MiddlewareMatcherGap implements NextRule {
   /**
    * The route can show or change something: an endpoint exporting a method (not only GET under settings alone, the
    * public site settings), or a page that calls or awaits something itself or imports a project module that fetches,
-   * awaits or runs a query. A placeholder page of markup and props has nothing to protect, and a page calling signIn()
-   * is a sign-in page.
+   * awaits or runs a query (with {@code loads}, only an await or such an import counts). A placeholder page of markup
+   * and props has nothing to protect, and a page calling signIn() is a sign-in page.
    */
-  private static boolean shows(NextModel model, Module m) {
+  private static boolean shows(NextModel model, Module m, boolean loads) {
     if (m.route().kind().equals("route")) {
       Set<String> methods = new java.util.HashSet<>(m.exports().keySet());
       methods.retainAll(Set.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"));
@@ -144,7 +173,7 @@ public class MiddlewareMatcherGap implements NextRule {
     if (calls(m.file(), n -> n.equals("signIn"))) {
       return false;
     }
-    if (calls(m.file(), n -> true) || m.file().tokens().stream().anyMatch(t -> t.isIdent("await"))) {
+    if (!loads && calls(m.file(), n -> true) || m.file().tokens().stream().anyMatch(t -> t.isIdent("await"))) {
       return true;
     }
     for (Import i : m.imports()) {

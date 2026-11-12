@@ -7,7 +7,12 @@ signed in or not. An action that only revalidates refreshes the cache and change
 <code>getServerSession</code>, <code>currentUser</code>, <code>getUser</code>, <code>getSession</code> or reads the
 session cookie counts as a check. Sign-in, sign-up, password, contact, newsletter, guest cart, error monitoring and view
 counter actions are public by design and are left out, and so is an action calling a project helper the analysis cannot see. An app that never
-checks a session anywhere has no signed-in users: its actions are public by design and are left out too.</p>
+checks a session anywhere has no signed-in users: its actions are public by design and are left out too
+(<code>getUser(userId)</code>, a session helper given an id, looks a record up and is no sign-in). When such an app
+has a page under <code>/admin</code>, that page is guarded in the browser at most: its actions that update or delete
+an existing record are reported, those creating one (a booking, a guestbook entry) are not. A getter
+(<code>getX</code>, <code>fetchX</code>, <code>loadX</code>...) whose only writes store what it read on the server
+(an account status fetched from a payment provider) and no value of the caller is left out as well.</p>
 <h2>Why is this an issue?</h2>
 <p>Hiding the button from signed-out users, or protecting the page with middleware, does not protect the action: the
 request can be sent to any page of the app. Each action has to check who calls it, as a route handler would.</p>

@@ -8,3 +8,8 @@ const sql = postgres(process.env.DATABASE_URL!);
 export async function addEntry(text: string) {
   await sql`INSERT INTO entries (text) VALUES (${text})`;
 }
+
+// compliant: no sign-in and no admin page, changing entries is public by design too
+export async function deleteEntry(id: string) {
+  await sql`DELETE FROM entries WHERE id = ${id}`;
+}

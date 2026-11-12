@@ -28,7 +28,9 @@ import java.util.regex.Pattern;
  * checks the session, itself or through the project helpers it calls. Sign-in, sign-up, password, contact, newsletter,
  * guest cart, error monitoring and view-counter actions are public by design and left out; so is an action calling a helper the model cannot see.
  * An action built with an action library is checked when its client middleware or procedure checks the session too,
- * one built by a wrapper ({@code withAuth(async (...) => ...)}) when the wrapper does.
+ * one built by a wrapper ({@code withAuth(async (...) => ...)}) when the wrapper does. An app without sign-in is left
+ * out, unless it has an /admin page: then its actions updating or deleting a record are reported. A getter's writes
+ * that only store what it read on the server ({@link #withoutSyncs}) do not count.
  * {@link Flow} holds what the endpoint rules share.
  */
 public class ServerActionWithoutAuth implements NextRule {
@@ -40,6 +42,10 @@ public class ServerActionWithoutAuth implements NextRule {
   /** A getter that revalidates refreshes the cache after reading: only a database or fetch write counts. */
   private static final Pattern GETTER = Pattern.compile("(get|fetch|list|find|load|read|search)[A-Z]");
   private static final Set<String> PUBLIC_CALLS = Set.of("signIn", "signUp", "signOut", "register", "createUserWithEmailAndPassword");
+  /** Calls that change or remove an existing record. */
+  private static final Pattern CHANGE = Pattern.compile("(update|delete|remove|destroy|upsert)\\w*|find\\w*And(Update|Delete|Remove|Replace)|replaceOne");
+  private static final Set<String> VALUE_FREE = Set.of("delete", "deleteMany", "deleteOne", "deleteFrom", "destroy", "findOneAndDelete",
+    "findByIdAndDelete", "findByIdAndRemove");
 
   private Flow flow;
 
@@ -50,7 +56,8 @@ public class ServerActionWithoutAuth implements NextRule {
       return;
     }
     flow = Flow.of(flow, ctx.model());
-    if (!flow.appChecksSession(m)) {
+    boolean signIn = flow.appChecksSession(m);
+    if (!signIn && !flow.appHasAdminPage(m)) {
       return;
     }
     for (ServerAction a : m.serverActions()) {
@@ -58,12 +65,90 @@ public class ServerActionWithoutAuth implements NextRule {
         continue;
       }
       List<Chain> chains = Flow.chains(a.fn());
-      if (flow.writes(m, chains, !GETTER.matcher(a.name().text()).lookingAt()) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
+      boolean getter = GETTER.matcher(a.name().text()).lookingAt();
+      if (getter) {
+        chains = withoutSyncs(m, a.fn(), chains);
+      }
+      // without sign-in the admin pages are guarded in the browser at most: an action changing an existing record is
+      // open; creating one (a booking, a guestbook entry) is what visitors do
+      if (!signIn && chains.stream().noneMatch(c -> Flow.calls(c, n -> CHANGE.matcher(n).matches()))) {
+        continue;
+      }
+      if (flow.writes(m, chains, !getter) && chains.stream().noneMatch(c -> Flow.calls(c, PUBLIC_CALLS::contains))
         && flow.session(m, a.fn()) == Flow.Check.NO && (a.builder() == null || flow.builder(m, a.builder()) == Flow.Check.NO)
         && (a.wrapper() == null || flow.session(a.wrapper().module(), a.wrapper().fn()) == Flow.Check.NO)) {
         ctx.report(a.name(), "Check the session in \"" + a.name().text() + "\" before it changes data: anyone can call a Server Action.");
       }
     }
+  }
+
+  /**
+   * The chains without the database writes that only store what the action read on the server: a getter mirroring an
+   * account status it fetched ({@code tx.update(payments).set({ ready: account.ready }).where(...)}) changes nothing the
+   * caller chooses. A write is such a sync when, its where clauses left out, it names no parameter of the action nor a
+   * local built from one without an await (a value read from elsewhere is the server's). Deletes are never syncs.
+   */
+  private List<Chain> withoutSyncs(Module m, JsTrees.Fn fn, List<Chain> chains) {
+    Set<String> caller = new HashSet<>();
+    if (fn.param() != null) {
+      caller.add(fn.param().text());
+    } else {
+      for (List<Node> item : fn.params().items()) {
+        int k = !item.isEmpty() && Nodes.isLeaf(item.get(0), "...") ? 1 : 0;
+        if (k < item.size()) {
+          ValueFlow.names(item.get(k)).forEach(t -> caller.add(t.text()));
+        }
+      }
+    }
+    List<Flow.Decl> decls = Flow.decls(fn.body());
+    for (int pass = 0; pass < 3; pass++) {
+      for (Flow.Decl d : decls) {
+        if (Flow.mentions(d.init(), caller) != null && Nodes.tokens(d.init()).stream().noneMatch(t -> t.isIdent("await"))) {
+          caller.addAll(d.names());
+        }
+      }
+    }
+    List<Chain> out = new ArrayList<>();
+    for (Chain c : chains) {
+      if (!flow.isDbCall(m, c) || !sync(c, caller)) {
+        out.add(c);
+      }
+    }
+    return out;
+  }
+
+  /** A write chain (or a transaction whose every write is one) storing no value of the caller; false for a non-write. */
+  private static boolean sync(Chain c, Set<String> caller) {
+    List<String> names = c.names();
+    for (int i = 1; i < names.size(); i++) {
+      if (Flow.TRANSACTIONS.contains(names.get(i)) && c.callAfter(i) != null) {
+        List<Chain> writes = Chains.in(c.callAfter(i).args()).stream().filter(w -> w.names().stream().skip(1).anyMatch(Flow.WRITES::contains)).toList();
+        return !writes.isEmpty() && writes.stream().allMatch(w -> sync(w, caller));
+      }
+    }
+    boolean write = false;
+    List<Node> values = new ArrayList<>();
+    for (int i = 0; i < names.size(); i++) {
+      String n = names.get(i);
+      if (VALUE_FREE.contains(n) || n.startsWith("$")) {
+        return false;
+      }
+      write |= i > 0 && Flow.WRITES.contains(n);
+      Chain.Call call = c.callAfter(i);
+      if (call != null && !n.equals("where")) {
+        for (List<Node> item : call.items()) {
+          for (Node x : item) {
+            if (x instanceof Node.Group g && g.is("{")) {
+              // { where: {...}, data: {...} }: the where clause picks the record
+              g.items().stream().filter(e -> !(e.size() > 1 && Nodes.isIdent(e.get(0), "where") && Nodes.isLeaf(e.get(1), ":"))).forEach(values::addAll);
+            } else {
+              values.add(x);
+            }
+          }
+        }
+      }
+    }
+    return write && Flow.mentions(values, caller) == null;
   }
 
   private static boolean isPublic(String name) {
@@ -84,13 +169,13 @@ public class ServerActionWithoutAuth implements NextRule {
       + "|drizzle-orm/(?!.*-core)(?!zod)[a-z0-9-]+|pg|postgres|mysql2(/promise)?|mysql|mongodb|mongoose|@vercel/postgres|kysely"
       + "|@planetscale/database|@neondatabase/serverless|better-sqlite3|sqlite3?|@libsql/client|knex|sequelize|typeorm"
       + "|@electric-sql/pglite|@xata\\.io/client|edgedb|gel");
-    private static final Set<String> WRITES = Set.of("create", "createMany", "createManyAndReturn", "update", "updateMany",
+    static final Set<String> WRITES = Set.of("create", "createMany", "createManyAndReturn", "update", "updateMany",
       "updateManyAndReturn", "upsert", "delete", "deleteMany", "insert", "insertInto", "insertOne", "insertMany", "updateTable",
       "deleteFrom", "updateOne", "replaceOne", "deleteOne", "findOneAndUpdate", "findOneAndDelete", "findOneAndReplace",
       "findByIdAndUpdate", "findByIdAndDelete", "findByIdAndRemove", "bulkWrite", "bulkCreate", "destroy", "$executeRaw",
       "$executeRawUnsafe", "increment", "decrement", "save");
     /** Writes only when the transaction they run writes: {@code db.transaction(async (tx) => tx.select()...)} reads. */
-    private static final Set<String> TRANSACTIONS = Set.of("transaction", "$transaction");
+    static final Set<String> TRANSACTIONS = Set.of("transaction", "$transaction");
     private static final Set<String> SQL_CALLS = Set.of("query", "execute", "$queryRaw", "$queryRawUnsafe", "unsafe", "run", "exec");
     private static final Pattern WRITE_SQL = Pattern.compile("(?is)^[`'\"]\\s*(insert|update|delete|replace|upsert|merge|truncate"
       + "|drop|alter)\\b.*");
@@ -104,6 +189,8 @@ public class ServerActionWithoutAuth implements NextRule {
     private static final Pattern PATH_LIKE = Pattern.compile("[./~#].*|@/.*|(src|lib|app|server|utils|actions|services|helpers"
       + "|data|db|features|modules)/.*");
     private static final Set<String> FETCH_WRITES = Set.of("post", "put", "patch", "delete");
+    private static final Pattern ID = Pattern.compile("id|[a-z]\\w*I[dD]");
+    private static final Pattern ADMIN_URL = Pattern.compile("(.*/)?admin(/.*)?");
     private static final Pattern URL_CREDENTIAL = Pattern.compile("(?i)[?&][a-z_-]*(key|token)=");
 
     private final NextModel model;
@@ -144,7 +231,41 @@ public class ServerActionWithoutAuth implements NextRule {
       NextModel.NextApp app = model.appOf(m.path());
       String dir = app == null ? "" : app.dir();
       return appAuth.computeIfAbsent(dir, d -> model.modules().stream()
-        .anyMatch(x -> x.path().startsWith(d) && x.file().chains().stream().anyMatch(c -> calls(c, Flow::isSessionCall))));
+        .anyMatch(x -> x.path().startsWith(d) && x.file().chains().stream().anyMatch(Flow::callsSession)));
+    }
+
+    /** Some page of the app holding m (the project when none) is under /admin. */
+    boolean appHasAdminPage(Module m) {
+      NextModel.NextApp app = model.appOf(m.path());
+      String dir = app == null ? "" : app.dir();
+      return model.modules().stream().anyMatch(x -> x.path().startsWith(dir) && x.route() != null && x.route().kind().equals("page")
+        && ADMIN_URL.matcher(x.route().url()).matches());
+    }
+
+    /** A session helper called without an id: {@code getUser(userId)} looks a record up, it reads no session. */
+    static boolean callsSession(Chain c) {
+      List<Chain.Segment> s = c.segments();
+      for (int i = 0; i + 1 < s.size(); i++) {
+        if (s.get(i) instanceof Chain.Name n && s.get(i + 1) instanceof Chain.Call call && isSessionCall(n.token().text())
+          && (call.items().isEmpty() || !isId(call.items().get(0)))) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** {@code userId}, {@code params.id}, {@code input.userId}. */
+    private static boolean isId(List<Node> arg) {
+      List<Token> t = Nodes.tokens(arg);
+      if (t.size() % 2 == 0) {
+        return false;
+      }
+      for (int i = 0; i < t.size(); i++) {
+        if (i % 2 == 0 ? t.get(i).kind() != TokenKind.IDENT : !t.get(i).is(".") && !t.get(i).is("?.")) {
+          return false;
+        }
+      }
+      return ID.matcher(t.get(t.size() - 1).text()).matches();
     }
 
     static boolean isSessionCall(String name) {
@@ -333,7 +454,7 @@ public class ServerActionWithoutAuth implements NextRule {
       }
       List<Chain> chains = chains(fn);
       for (Chain c : chains) {
-        if (calls(c, Flow::isSessionCall) || calls(c, n -> n.equals("cookies") || n.equals("headers"))) {
+        if (callsSession(c) || calls(c, n -> n.equals("cookies") || n.equals("headers"))) {
           return Check.YES;
         }
       }

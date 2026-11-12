@@ -68,7 +68,7 @@ public final class RuleCatalog {
       "An unstable_cache callback or a \"use cache\" function that depends on cookies(), headers() or the session without taking the value as an argument or key part is cached once and served to every user.",
       "const session = await auth();\nconst getPlan = unstable_cache(async () => db.plan.find({ where: { userId: session.user.id } }), ['plan']); // Noncompliant", PersonalizedCachedFetch::new),
     spec("OpenRedirect", Type.VULNERABILITY, "MAJOR", true, "Redirect targets from the request should be checked",
-      "redirect(), permanentRedirect(), NextResponse.redirect(), Response.redirect(), router.push() / replace() of useRouter() or window.location with a target from searchParams, params, form data or the Pages Router query, not checked against an allow-list or the same origin, lets an attacker send users anywhere from a trusted link.",
+      "redirect(), permanentRedirect(), NextResponse.redirect(), Response.redirect(), res.redirect() / res.writeHead() of a Pages Router API route, router.push() / replace() of useRouter() or window.location with a target from searchParams, params, form data or the Pages Router query, not checked against an allow-list or the same origin, lets an attacker send users anywhere from a trusted link.",
       "redirect(searchParams.next); // Noncompliant", OpenRedirect::new),
     spec("UnsafeHtmlFromInput", Type.VULNERABILITY, "CRITICAL", true, "dangerouslySetInnerHTML should not render unsanitized input",
       "dangerouslySetInnerHTML with a value from params, searchParams, form data, the Pages Router query or a fetch response, not sanitized (DOMPurify, sanitize-html, xss), is cross-site scripting.",

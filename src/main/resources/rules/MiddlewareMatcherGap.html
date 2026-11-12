@@ -1,13 +1,19 @@
 <p>A middleware (<code>middleware.ts</code>, or <code>proxy.ts</code> in Next.js 16) that checks the session runs only
-for the paths its <code>config.matcher</code> matches. Pages and route handlers under <code>dashboard</code>,
+for the paths its <code>config.matcher</code> matches. A Clerk middleware written as
+<code>if (isProtectedRoute(req)) await auth.protect()</code> protects only the paths its <code>createRouteMatcher</code>
+lists; the issue is then reported on that list. Pages and route handlers under <code>dashboard</code>,
 <code>admin</code>, <code>settings</code> or <code>account</code> that the matcher leaves out, and that check nothing
 themselves, are open to anyone. The issue is reported on the matcher and lists the routes left out.</p>
 <p>A route checks itself with a session call (<code>auth()</code>, <code>getServerSession</code>,
 <code>currentUser</code>...), a cookie, header or token read, an auth hook (<code>useSession</code>...), a guard component
-or wrapper, a redirect, in the module or a module it imports; a page also through an enclosing layout (or the Pages
-Router <code>_app</code>) that checks the session and redirects or renders a guard. Public paths (sign-in, sign-up,
-auth, webhooks, callbacks, public, static) are left out, and so is a middleware whose matcher covers no
-protected-looking route (one meant only for the sign-in page). The matcher follows Next.js semantics:
+or wrapper, a redirect (also <code>router.replace('/login')</code> in the browser), in the module or a module it
+imports; a page also through an enclosing layout (or the Pages Router <code>_app</code>) that checks the session and
+redirects or renders a guard. Public paths (sign-in, sign-up, auth, webhooks, callbacks, public, static, demo) are left
+out, as are sign-in pages (the <code>signIn</code> page of next-auth's <code>withAuth</code>, a page calling
+<code>signIn()</code>), placeholder pages that call, await and fetch nothing, route handlers that export no method or
+only <code>GET</code> under <code>settings</code> (public site settings), and a middleware whose matcher covers no
+protected-looking route (one meant only for the sign-in page). A Clerk route matcher that lists the public routes
+(<code>if (!isPublicRoute(req))</code>) protects everything else and is not reported. The matcher follows Next.js semantics:
 <code>:param</code>, <code>:param*</code>, <code>:param+</code>, <code>:param?</code>, <code>(regex)</code> groups and
 negative lookaheads such as <code>/((?!api|_next/static).*)</code>; an entry with <code>has</code> or
 <code>missing</code> counts as matching, and a matcher that is not a literal counts as matching everything.</p>

@@ -6,6 +6,8 @@ import io.github.snakeinprod.nextjs.model.Module;
 import io.github.snakeinprod.nextjs.model.NextModel;
 import io.github.snakeinprod.nextjs.model.Route;
 import io.github.snakeinprod.nextjs.parse.Chain;
+import io.github.snakeinprod.nextjs.parse.Nodes;
+import io.github.snakeinprod.nextjs.parse.ParsedFile;
 import io.github.snakeinprod.nextjs.parse.Token;
 import io.github.snakeinprod.nextjs.parse.TokenKind;
 import java.util.ArrayList;
@@ -24,7 +26,13 @@ import java.util.regex.PatternSyntaxException;
  * only what the matcher matches. Pages and route handlers under protected-looking segments (dashboard, admin,
  * settings, account) that the matcher leaves out and that check nothing themselves (no session call, cookie, header
  * or token read, no auth hook or guard component, no redirect, neither in the module nor a module it imports, and no
- * enclosing layout or Pages Router _app that checks the session and redirects or guards) are open. Reported once per middleware, on the matcher, when the matcher
+ * enclosing layout or Pages Router _app that checks the session and redirects or guards, no client-side redirect to a
+ * sign-in path) are open. Left out as well: placeholder pages (no call or await of their own, no imported module that
+ * fetches or queries), sign-in pages (the withAuth signIn page, a page calling signIn()), demo paths, route handlers
+ * exporting no method or only GET under settings alone (public site settings). With Clerk's
+ * {@code if (isProtected(req)) auth.protect()} the routes of that createRouteMatcher are the protected ones (within
+ * config.matcher); a negated or public route matcher, or a protect outside such an if, makes the middleware skipped.
+ * Reported once per middleware, on the matcher, when the matcher
  * covers at least one protected-looking route (it is meant as a guard). Matchers follow Next.js semantics
  * (path-to-regexp: {@code :p}, {@code :p*}, {@code :p+}, {@code :p?}, {@code (regex)}); a matcher that is not literal
  * or not understood counts as matching everything.
@@ -34,7 +42,7 @@ public class MiddlewareMatcherGap implements NextRule {
   static final int LISTED = 5;
   private static final Pattern PROTECTED = Pattern.compile("dashboard|admin|settings|account|accounts");
   private static final Pattern PUBLIC = Pattern.compile("auth|login|log-in|signin|sign-in|signup|sign-up|register|logout"
-    + "|signout|sign-out|webhooks?|public|_next|static|callback|forgot|reset|verify|invite|share|onboarding");
+    + "|signout|sign-out|webhooks?|public|_next|static|callback|forgot|reset|verify|invite|share|onboarding|demo");
   private static final Pattern CLIENT_AUTH = Pattern.compile("use[A-Z]?\\w*(Session|User|Auth|Viewer|Account|Me|Clerk)\\w*");
   private static final Pattern GUARD = Pattern.compile("SignedIn|SignedOut|Protect|RedirectToSignIn|withPageAuthRequired"
     + "|\\w*(Auth|Session|Login|Protected|Private)\\w*(Guard|Gate|Check|Wrapper|Required|Boundary|Route|Layout)\\w*"
@@ -42,6 +50,8 @@ public class MiddlewareMatcherGap implements NextRule {
   private static final Pattern ACTION = Pattern.compile("redirect|permanentRedirect|notFound|unauthorized|forbidden"
     + "|(require|ensure|assert|protect|must)\\w*");
   private static final Pattern WORD = Pattern.compile("[A-Za-z0-9_-]+");
+  private static final Pattern LOGIN = Pattern.compile("(?i)['\"`]/[^'\"`]*(login|log-in|signin|sign-in|auth)[^'\"`]*['\"`]");
+  private static final Pattern FETCH = Pattern.compile("fetch|axios|use\\w*(Query|SWR|Mutation)\\w*");
 
   private ServerActionWithoutAuth.Flow flow;
   private final Map<Module, Boolean> direct = new HashMap<>();
@@ -56,23 +66,34 @@ public class MiddlewareMatcherGap implements NextRule {
     Token at = matcherKey(mw);
     List<String> sources = at == null ? null : sources(mw, at);
     List<Pattern> patterns = sources == null ? null : compile(sources);
-    if (patterns == null) {
+    RouteMatcher clerk = RouteMatcher.of(mw);
+    if (clerk == RouteMatcher.UNCLEAR || clerk == null && patterns == null) {
       return;
+    }
+    List<Pattern> guarded = clerk == null ? null : compile(clerk.sources);
+    if (clerk != null && guarded == null) {
+      return;
+    }
+    if (clerk != null) {
+      // the middleware runs where config.matcher says (everywhere when it is not literal) and protects what the route matcher says
+      at = clerk.at;
+      sources = sources == null || patterns == null ? clerk.sources : java.util.stream.Stream.concat(sources.stream(), clerk.sources.stream()).toList();
     }
     flow = ServerActionWithoutAuth.Flow.of(flow, ctx.model());
     NextModel model = ctx.model();
     NextModel.NextApp app = model.appOf(mw.path());
     List<String> words = new ArrayList<>(new LinkedHashSet<>(sources.stream().flatMap(s -> WORD.matcher(s).results().map(java.util.regex.MatchResult::group)).toList()));
-    boolean guards = sources.stream().anyMatch(MiddlewareMatcherGap::looksProtected);
+    boolean guards = (clerk == null ? sources : clerk.sources).stream().anyMatch(MiddlewareMatcherGap::looksProtected);
+    Set<String> signIn = signInPages(mw);
     Set<String> open = new TreeSet<>();
     for (Module m : model.modules()) {
       Route r = m.route();
       if (r == null || !r.isRoute() || r.url() == null || model.appOf(m.path()) != app || !looksProtected(r.url())) {
         continue;
       }
-      if (covered(patterns, r.url(), words)) {
+      if ((patterns == null || covered(patterns, r.url(), words)) && (guarded == null || covered(guarded, r.url(), words))) {
         guards = true;
-      } else if (!protects(model, m)) {
+      } else if (!protects(model, m) && shows(model, m) && !signIn.contains(r.url())) {
         open.add(r.url());
       }
     }
@@ -102,6 +123,78 @@ public class MiddlewareMatcherGap implements NextRule {
   }
 
   // ------------------------------------------------------------ the route's own checks
+
+  /**
+   * The route can show or change something: an endpoint exporting a method (not only GET under settings alone, the
+   * public site settings), or a page that calls or awaits something itself or imports a project module that fetches,
+   * awaits or runs a query. A placeholder page of markup and props has nothing to protect, and a page calling signIn()
+   * is a sign-in page.
+   */
+  private static boolean shows(NextModel model, Module m) {
+    if (m.route().kind().equals("route")) {
+      Set<String> methods = new java.util.HashSet<>(m.exports().keySet());
+      methods.retainAll(Set.of("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"));
+      boolean reads = Set.of("GET", "HEAD", "OPTIONS").containsAll(methods);
+      boolean settingsOnly = !m.route().url().matches("(?i).*/(dashboard|admin|account|accounts)(/.*)?");
+      return !methods.isEmpty() && !(reads && settingsOnly);
+    }
+    if (!m.route().kind().equals("page")) {
+      return true;
+    }
+    if (calls(m.file(), n -> n.equals("signIn"))) {
+      return false;
+    }
+    if (calls(m.file(), n -> true) || m.file().tokens().stream().anyMatch(t -> t.isIdent("await"))) {
+      return true;
+    }
+    for (Import i : m.imports()) {
+      Module t = i.typeOnly() ? null : model.target(i);
+      if (t != null && (calls(t.file(), n -> FETCH.matcher(n).matches()) || t.file().tokens().stream().anyMatch(x -> x.isIdent("await")))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The file calls a name that passes the test; a function declaration ({@code function Page()}) is no call. */
+  private static boolean calls(ParsedFile f, java.util.function.Predicate<String> test) {
+    for (Chain c : f.chains()) {
+      Token before = c.from() > 0 ? Nodes.leaf(c.container().children().get(c.from() - 1)) : null;
+      if ((before == null || !before.isIdent("function")) && ServerActionWithoutAuth.Flow.calls(c, test)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A client-side guard: {@code router.push('/login')}, {@code router.replace('/auth/sign-in?next=...')}. */
+  private static boolean sendsToSignIn(ParsedFile f) {
+    for (Chain c : f.chains()) {
+      List<Chain.Segment> s = c.segments();
+      for (int i = 0; i + 1 < s.size(); i++) {
+        if (s.get(i) instanceof Chain.Name n && (n.token().text().equals("push") || n.token().text().equals("replace"))
+          && s.get(i + 1) instanceof Chain.Call call && !call.items().isEmpty() && !call.items().get(0).isEmpty()) {
+          Token first = Nodes.leaf(call.items().get(0).get(0));
+          if (first != null && first.kind() == TokenKind.STRING && LOGIN.matcher(first.text()).matches()) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The literal {@code signIn: '/path'} pages of the middleware (next-auth's withAuth pages option). */
+  private static Set<String> signInPages(Module mw) {
+    Set<String> out = new java.util.HashSet<>();
+    List<Token> t = mw.file().tokens();
+    for (int i = 0; i + 2 < t.size(); i++) {
+      if (t.get(i).isIdent("signIn") && t.get(i + 1).is(":") && literal(t.get(i + 2))) {
+        out.add(JsTrees.unquote(t.get(i + 2).text()));
+      }
+    }
+    return out;
+  }
 
   /** The route, an enclosing layout (App Router) or _app (Pages Router), or a module one of them imports checks the caller. */
   private boolean protects(NextModel model, Module m) {
@@ -188,6 +281,9 @@ public class MiddlewareMatcherGap implements NextRule {
           return true;
         }
       }
+      if (sendsToSignIn(x.file())) {
+        return true;
+      }
       for (JsTrees.Fn fn : x.functions().values()) {
         if (RouteHandlerWithoutAuth.checksToken(fn, ServerActionWithoutAuth.Flow.chains(fn))
           || flow.session(x, fn) != ServerActionWithoutAuth.Flow.Check.NO) {
@@ -216,8 +312,11 @@ public class MiddlewareMatcherGap implements NextRule {
    * Null when any part is not a literal (a variable, a spread, a template with substitutions, a concatenation).
    */
   static List<String> sources(Module mw, Token key) {
-    List<Token> t = mw.file().tokens();
-    int i = t.indexOf(key) + 2;
+    return sources(mw.file().tokens(), mw.file().tokens().indexOf(key) + 2);
+  }
+
+  /** The literal sources of the string or array at token i, see {@link #sources(Module, Token)}. */
+  private static List<String> sources(List<Token> t, int i) {
     List<String> out = new ArrayList<>();
     if (i >= t.size()) {
       return null;
@@ -267,6 +366,124 @@ public class MiddlewareMatcherGap implements NextRule {
       }
     }
     return null;
+  }
+
+  /**
+   * Clerk's {@code const isProtected = createRouteMatcher([...])} used as {@code if (isProtected(req)) auth.protect()}:
+   * the routes it lists are the protected ones. Null when the middleware has no route matcher; UNCLEAR when the
+   * semantics are not that one: a matcher negated ({@code !isPublic(req)}, a list of public routes), a protect,
+   * redirectToSignIn or sign-in redirect outside an {@code if} on a route matcher, or a list that is not literal.
+   */
+  record RouteMatcher(Token at, List<String> sources) {
+
+    static final RouteMatcher UNCLEAR = new RouteMatcher(null, List.of());
+
+    static RouteMatcher of(Module mw) {
+      List<Token> t = mw.file().tokens();
+      Map<String, Token> names = new HashMap<>();
+      for (int i = 2; i + 1 < t.size(); i++) {
+        if (t.get(i).isIdent("createRouteMatcher") && t.get(i + 1).is("(")) {
+          if (!t.get(i - 1).is("=") || t.get(i - 2).kind() != TokenKind.IDENT) {
+            return UNCLEAR;
+          }
+          names.put(t.get(i - 2).text(), t.get(i));
+        }
+      }
+      if (names.isEmpty()) {
+        return null;
+      }
+      Set<Integer> inside = new java.util.HashSet<>();
+      Token at = null;
+      List<String> out = new ArrayList<>();
+      for (int i = 1; i + 2 < t.size(); i++) {
+        Token x = t.get(i);
+        if (x.kind() == TokenKind.IDENT && names.containsKey(x.text()) && t.get(i + 1).is("(") && t.get(i - 1).is("!")) {
+          return UNCLEAR;
+        }
+        if (!x.isIdent("if") || !t.get(i + 1).is("(")) {
+          continue;
+        }
+        int close = close(t, i + 1);
+        int end = t.get(close + 1).is("{") ? close(t, close + 1) : statementEnd(t, close + 1);
+        if (!protects(t, close + 1, end)) {
+          continue;
+        }
+        List<String> matchers = new ArrayList<>();
+        for (int k = i + 2; k < close; k++) {
+          if (t.get(k).kind() == TokenKind.IDENT && names.containsKey(t.get(k).text()) && t.get(k + 1).is("(")) {
+            matchers.add(t.get(k).text());
+          }
+        }
+        if (matchers.size() != 1) {
+          return UNCLEAR;
+        }
+        Token create = names.get(matchers.get(0));
+        List<String> listed = MiddlewareMatcherGap.sources(t, t.indexOf(create) + 2);
+        if (listed == null) {
+          return UNCLEAR;
+        }
+        at = at == null ? create : at;
+        out.addAll(listed);
+        for (int k = close + 1; k <= end; k++) {
+          inside.add(k);
+        }
+      }
+      for (int i = 0; i < t.size(); i++) {
+        if (protects(t, i, i) && !inside.contains(i)) {
+          return UNCLEAR;
+        }
+      }
+      return at == null ? null : new RouteMatcher(at, out);
+    }
+
+    /** Tokens from..to hold auth.protect(), redirectToSignIn or a redirect to a sign-in path. */
+    private static boolean protects(List<Token> t, int from, int to) {
+      for (int k = from; k <= to && k < t.size(); k++) {
+        Token x = t.get(k);
+        if (x.isIdent("protect") || x.isIdent("redirectToSignIn")) {
+          return true;
+        }
+        if (x.kind() == TokenKind.STRING && LOGIN.matcher(x.text()).matches()) {
+          for (int b = Math.max(0, k - 6); b < k; b++) {
+            if (t.get(b).isIdent("redirect")) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    /** The bracket closing the one at i. */
+    private static int close(List<Token> t, int i) {
+      int depth = 0;
+      for (int k = i; k < t.size(); k++) {
+        depth += "([{".contains(t.get(k).text()) && t.get(k).kind() == TokenKind.OP ? 1
+          : ")]}".contains(t.get(k).text()) && t.get(k).kind() == TokenKind.OP ? -1 : 0;
+        if (depth == 0) {
+          return k;
+        }
+      }
+      return t.size() - 1;
+    }
+
+    /** The last token of the statement starting at i: up to ";", a line break or the end of the enclosing block. */
+    private static int statementEnd(List<Token> t, int i) {
+      int depth = 0;
+      for (int k = i; k < t.size(); k++) {
+        Token x = t.get(k);
+        if (x.kind() == TokenKind.OP && "([{".contains(x.text())) {
+          depth++;
+        } else if (x.kind() == TokenKind.OP && ")]}".contains(x.text())) {
+          if (--depth < 0) {
+            return k - 1;
+          }
+        } else if (depth == 0 && (x.is(";") || k > i && x.line() != t.get(k - 1).endLine())) {
+          return x.is(";") ? k : k - 1;
+        }
+      }
+      return t.size() - 1;
+    }
   }
 
   private static boolean literal(Token t) {

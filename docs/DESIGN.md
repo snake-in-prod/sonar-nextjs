@@ -124,6 +124,16 @@ helpers it calls); ServerActionWithoutValidation skips it when the wrapper parse
 `clientArg` parameters as input. A wrapper given a member (`wrap(service.save)`), or one from a package, is no
 action the model sees.
 
+### Middleware matchers
+
+MiddlewareMatcherGap reads `config.matcher` as path-to-regexp (`toRegex`, the way Next.js compiles it) and, for
+Clerk, `const isProtected = createRouteMatcher([...])` used only as `if (isProtected(req)) { auth.protect() }` (or
+`redirectToSignIn`, or a redirect to a sign-in path): a route is guarded when both match it. A negated route matcher
+(`!isPublic(req)`, a list of public routes), a protect outside an `if` on one route matcher, or a list that is not
+literal leaves the middleware out. Routes left out are reported only when they can show or change something: not a
+placeholder page (no call or await of its own, no imported module that fetches or queries), not a sign-in page, not a
+route handler exporting no method or only GET under settings alone.
+
 ### Test files
 
 `*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `__fixtures__/`, `e2e/`,

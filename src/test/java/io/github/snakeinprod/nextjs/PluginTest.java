@@ -28,7 +28,7 @@ class PluginTest {
     assertThat(new HashSet<>(keys)).hasSameSizeAs(keys);
     assertThat(RuleCatalog.ALL).allSatisfy(s -> assertThat(s.factory().get()).isNotNull());
     assertThat(RuleCatalog.ALL.stream().filter(s -> !s.active()).map(RuleCatalog.Spec::key))
-      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes", "MiddlewareMatcherGap");
+      .containsExactlyInAnyOrder("SearchParamsWithoutSuspense", "ImageFillWithoutSizes");
   }
 
   @Test
@@ -55,7 +55,7 @@ class PluginTest {
     for (String language : List.of("js", "ts")) {
       BuiltInQualityProfilesDefinition.BuiltInQualityProfile p = context.profile(language, "Next.js");
       assertThat(p.isDefault()).isFalse();
-      assertThat(p.rules()).hasSize(14).allMatch(r -> r.repoKey().equals("nextjs-" + language));
+      assertThat(p.rules()).hasSize(15).allMatch(r -> r.repoKey().equals("nextjs-" + language));
     }
   }
 

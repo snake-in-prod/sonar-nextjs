@@ -25,6 +25,21 @@ class MiddlewareMatcherGapTest {
   }
 
   @Test
+  void sign_in_pages() {
+    RuleVerifier.verify("MiddlewareMatcherGapSignIn", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void clerk_route_matcher_deciding_what_is_protected() {
+    RuleVerifier.verify("MiddlewareMatcherGapClerk", new MiddlewareMatcherGap());
+  }
+
+  @Test
+  void clerk_route_matcher_listing_the_public_routes() {
+    RuleVerifier.verify("MiddlewareMatcherGapClerkPublic", new MiddlewareMatcherGap());
+  }
+
+  @Test
   void next_matcher_semantics() {
     assertThat(covers("/dashboard/:path*", "/dashboard")).isTrue();
     assertThat(covers("/dashboard/:path*", "/dashboard/a/b")).isTrue();

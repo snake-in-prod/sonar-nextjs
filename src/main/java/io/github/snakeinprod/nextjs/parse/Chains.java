@@ -110,8 +110,12 @@ public final class Chains {
     int j = i + 1;
     while (j < kids.size()) {
       Node n = kids.get(j);
+      int typeArgs = typeArgsEnd(kids, j);
       if (n instanceof Node.Group sub && (sub.is("(") || sub.is("["))) {
         j++;
+      } else if (typeArgs > j) {
+        // TypeScript type arguments of a call: f<T>(...)
+        j = typeArgs;
       } else if (n instanceof Node.Leaf l && l.token().is("!") && j + 1 < kids.size() && Nodes.leaf(kids.get(j + 1)) != null
         && ACCESSORS.contains(Nodes.leaf(kids.get(j + 1)).text())) {
         // TypeScript non-null assertion: x!.y
@@ -132,7 +136,10 @@ public final class Chains {
     String accessor = "";
     for (int k = from; k < to; k++) {
       Node n = kids.get(k);
-      if (n instanceof Node.Group sub) {
+      int typeArgs = typeArgsEnd(kids, k);
+      if (typeArgs > k) {
+        k = typeArgs - 1;
+      } else if (n instanceof Node.Group sub) {
         segs.add(sub.is("(") ? new Chain.Call(sub) : new Chain.Index(sub));
       } else {
         Token t = ((Node.Leaf) n).token();
@@ -145,5 +152,39 @@ public final class Chains {
       }
     }
     return new Chain(List.copyOf(segs), g, from, to);
+  }
+
+  /**
+   * End index (exclusive) of TypeScript type arguments starting at {@code i} ({@code <A, B.C[]>}) when a call's
+   * parentheses follow them, else {@code i}. Only names, dots, commas, unions, brackets and object types are accepted,
+   * so a comparison ({@code a < b}) is never taken for one.
+   */
+  private static int typeArgsEnd(List<Node> kids, int i) {
+    Token open = Nodes.leaf(kids.get(i));
+    if (open == null || !open.is("<")) {
+      return i;
+    }
+    int depth = 0;
+    for (int k = i; k < kids.size() && k < i + 40; k++) {
+      Node n = kids.get(k);
+      if (n instanceof Node.Group sub) {
+        if (sub.is("(") || depth == 0) {
+          return i;
+        }
+        continue;
+      }
+      Token t = ((Node.Leaf) n).token();
+      if (t.is("<")) {
+        depth++;
+      } else if (t.is(">") || t.is(">>")) {
+        depth -= t.text().length();
+        if (depth <= 0) {
+          return depth == 0 && k + 1 < kids.size() && kids.get(k + 1) instanceof Node.Group g && g.is("(") ? k + 1 : i;
+        }
+      } else if (t.kind() != TokenKind.IDENT && !t.is(".") && !t.is(",") && !t.is("|") && !t.is("&") && !t.is("?")) {
+        return i;
+      }
+    }
+    return i;
   }
 }

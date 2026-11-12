@@ -35,6 +35,11 @@ final class ValueFlow {
   interface Source {
     /** {@code locals}: names declared in the scope with a plain {@code const name = ...}. */
     List<List<String>> keys(List<Node> expr, Map<String, List<List<String>>> tainted, Set<String> locals);
+
+    /** Keys of one property of an expression's value, for a name destructured from it ({@code const { next } = expr}). */
+    default List<List<String>> keys(List<Node> expr, String property, Map<String, List<List<String>>> tainted, Set<String> locals) {
+      return keys(expr, tainted, locals);
+    }
   }
 
   private static final Set<String> DECLARE = Set.of("const", "let", "var");
@@ -180,7 +185,7 @@ final class ValueFlow {
       Token value = setters.get(c.firstName());
       Chain.Call call = c.names().size() == 1 ? c.callAfter(0) : null;
       if (value != null && call != null && call.items().size() == 1 && !constant(call.items().get(0))) {
-        out.add(new Decl(List.of(value), call.items().get(0), true));
+        out.add(new Decl(List.of(value), call.items().get(0), true, null));
       }
     }
     return out;
@@ -199,8 +204,32 @@ final class ValueFlow {
       || Set.of("null", "undefined", "true", "false").contains(t.text());
   }
 
-  /** {@code plain}: the target is one name, not a pattern. */
-  record Decl(List<Token> names, List<Node> init, boolean plain) {
+  /** {@code plain}: the target is one name, not a pattern; {@code target}: the name or pattern, null for a React state. */
+  record Decl(List<Token> names, List<Node> init, boolean plain, Node target) {
+
+    /** The property each name of the pattern takes. */
+    Map<String, String> properties() {
+      return ValueFlow.properties(target);
+    }
+  }
+
+  /** The property each name of an object pattern takes: {@code { next, data: d }} gives next to next, d to data. */
+  static Map<String, String> properties(Node target) {
+    Map<String, String> out = new HashMap<>();
+    if (target instanceof Node.Group g && g.is("{")) {
+      for (List<Node> item : g.items()) {
+        Token key = item.isEmpty() ? null : Nodes.leaf(item.get(0));
+        if (key == null || key.kind() != TokenKind.IDENT) {
+          continue;
+        }
+        if (item.size() > 2 && Nodes.isLeaf(item.get(1), ":") && Nodes.leaf(item.get(2)) != null) {
+          out.put(Nodes.leaf(item.get(2)).text(), key.text());
+        } else if (item.size() == 1 || Nodes.isLeaf(item.get(1), "=")) {
+          out.put(key.text(), key.text());
+        }
+      }
+    }
+    return out;
   }
 
   /** {@code const|let|var target [: Type] = init} and {@code name = init} statements, in any block of the scope. */
@@ -229,7 +258,7 @@ final class ValueFlow {
             break;
           }
           int end = expressionEnd(kids, k + 1);
-          out.add(new Decl(names, kids.subList(k + 1, end), kids.get(j) instanceof Node.Leaf));
+          out.add(new Decl(names, kids.subList(k + 1, end), kids.get(j) instanceof Node.Leaf, kids.get(j)));
           if (end < kids.size() && Nodes.isLeaf(kids.get(end), ",")) {
             j = end + 1;
           } else {
@@ -240,7 +269,7 @@ final class ValueFlow {
         && Nodes.isLeaf(kids.get(i + 1), "=") && (i == 0 || Nodes.isLeaf(kids.get(i - 1), ";")
         || kids.get(i - 1).last() != null && kids.get(i - 1).last().line() < l.token().line())) {
         int end = expressionEnd(kids, i + 2);
-        out.add(new Decl(List.of(l.token()), kids.subList(i + 2, end), true));
+        out.add(new Decl(List.of(l.token()), kids.subList(i + 2, end), true, l));
       }
     }
     for (int i = 0; i < kids.size(); i++) {
@@ -352,7 +381,9 @@ final class ValueFlow {
         keys.add(List.of(e.getKey()));
         boolean all = true;
         for (Decl d : e.getValue()) {
-          List<List<String>> k = source.keys(d.init(), tainted, locals);
+          String property = d.properties().get(e.getKey());
+          List<List<String>> k = property == null ? source.keys(d.init(), tainted, locals)
+            : source.keys(d.init(), property, tainted, locals);
           if (k == null) {
             all = false;
             break;
@@ -535,10 +566,28 @@ final class ValueFlow {
     private static final Set<String> WRAPPERS = Set.of("String", "decodeURIComponent", "decodeURI");
     private static final Set<String> FORM_GETTERS = Set.of("get", "getAll");
 
+    private static final Set<String> PARSE = Set.of("parse", "safeParse", "parseAsync", "safeParseAsync", "spa");
+
+    /** Reads a schema: TRUE when the field at {@code path} of what it parses is any string, null when the schema is not found. */
+    interface Fields {
+      Boolean free(List<Node> schema, List<String> path);
+    }
+
+    /** A name holding an object: its initializer, and the properties to take from it ({@code const { data } = init}). */
+    record Bound(List<Node> init, List<String> prefix) {
+    }
+
+    /** {@code S.safeParse(arg).tail}: {@code prefix} is "data" for safeParse, "value" for parseWithZod, null for parse. */
+    private record Parse(List<Node> schema, List<Node> arg, String prefix, List<String> tail) {
+    }
+
     private final boolean html;
     private final boolean route;
     private final boolean body;
     private final Set<String> objects;
+    private final Map<String, List<Node>> schemas;
+    private final Map<String, Bound> bound;
+    private final Fields fields;
 
     /** {@code route}: a Next.js convention file, where "params" are the route params; elsewhere a "params" is any argument. */
     Direct(boolean html, boolean route) {
@@ -551,10 +600,24 @@ final class ValueFlow {
      * {@code data.get('next')}) while the parameter itself is not (a Server Action's {@code path: string}).
      */
     Direct(boolean html, boolean route, boolean body, Set<String> objects) {
+      this(html, route, body, objects, Map.of(), Map.of(), (schema, path) -> null);
+    }
+
+    /**
+     * {@code schemas}: the schema of an object of {@code objects} (an action library's {@code parsedInput}), whose
+     * fields are inputs unless the schema restricts them; {@code bound}: names holding an object literal or what a
+     * schema parsed ({@code const p = S.safeParse({ next: formData.get('next') })}), whose fields are followed;
+     * {@code fields}: reads those schemas.
+     */
+    Direct(boolean html, boolean route, boolean body, Set<String> objects, Map<String, List<Node>> schemas, Map<String, Bound> bound,
+      Fields fields) {
       this.html = html;
       this.route = route;
       this.body = body;
       this.objects = objects;
+      this.schemas = schemas;
+      this.bound = bound;
+      this.fields = fields;
     }
 
     /** Names of parameters typed FormData ({@code data: FormData}) in the scope: tainted from the start. */
@@ -565,6 +628,187 @@ final class ValueFlow {
         if (toks.get(i).kind() == TokenKind.IDENT && toks.get(i + 1).is(":") && toks.get(i + 2).isIdent("FormData")) {
           out.put(toks.get(i).text(), List.of(List.of(toks.get(i).text())));
         }
+      }
+      return out;
+    }
+
+    @Override
+    public List<List<String>> keys(List<Node> expr, String property, Map<String, List<List<String>>> tainted, Set<String> locals) {
+      List<Node> e = trim(expr);
+      return object(e) ? field(e, List.of(property), tainted, locals, 0) : keys(expr, tainted, locals);
+    }
+
+    /** An object whose fields are followed: a literal, what a schema parsed, or a property of a bound name. */
+    boolean object(List<Node> e) {
+      e = trim(e);
+      if (e.size() == 1 && e.get(0) instanceof Node.Group g && g.is("{") || parse(e) != null) {
+        return true;
+      }
+      Token t = e.isEmpty() ? null : Nodes.leaf(e.get(0));
+      return t != null && bound.containsKey(t.text()) && members(e) != null;
+    }
+
+    /**
+     * Keys of the field at {@code path} of an object expression: a literal's property, a field of what a schema parsed
+     * when the schema leaves it any string (and the parsed value's field is from the request), a field of a bound name.
+     */
+    private List<List<String>> field(List<Node> expr, List<String> path, Map<String, List<List<String>>> tainted, Set<String> locals,
+      int depth) {
+      List<Node> e = trim(expr);
+      if (depth > 6 || e.isEmpty()) {
+        return null;
+      }
+      if (e.size() == 1 && e.get(0) instanceof Node.Group g && g.is("{")) {
+        if (path.isEmpty()) {
+          return null;
+        }
+        List<Node> value = Schemas.property(g, path.get(0));
+        if (value != null) {
+          return path.size() == 1 ? keys(value, tainted, locals) : field(value, path.subList(1, path.size()), tainted, locals, depth + 1);
+        }
+        for (List<Node> item : g.items()) {
+          if (item.size() > 1 && Nodes.isLeaf(item.get(0), "...")) {
+            List<List<String>> k = field(item.subList(1, item.size()), path, tainted, locals, depth + 1);
+            if (k != null) {
+              return k;
+            }
+          }
+        }
+        return null;
+      }
+      Parse p = parse(e);
+      if (p != null) {
+        List<String> full = new ArrayList<>(p.tail());
+        full.addAll(path);
+        if (p.prefix() != null) {
+          if (full.isEmpty() || !full.get(0).equals(p.prefix())) {
+            return null;
+          }
+          full = full.subList(1, full.size());
+        }
+        if (full.isEmpty() || !Boolean.TRUE.equals(fields.free(p.schema(), full))) {
+          return null;
+        }
+        return argument(p.arg(), full, tainted, locals, depth + 1);
+      }
+      List<String> names = members(e);
+      Bound b = names == null ? null : bound.get(Nodes.leaf(e.get(0)).text());
+      if (b == null) {
+        return null;
+      }
+      List<String> full = new ArrayList<>(b.prefix());
+      full.addAll(names);
+      full.addAll(path);
+      return field(b.init(), full, tainted, locals, depth + 1);
+    }
+
+    /** A field of what a schema parsed from {@code arg}: an object expression's field, or one field of a request value. */
+    private List<List<String>> argument(List<Node> arg, List<String> path, Map<String, List<List<String>>> tainted, Set<String> locals,
+      int depth) {
+      List<Node> a = trim(arg);
+      if (object(a)) {
+        return field(a, path, tainted, locals, depth);
+      }
+      // Object.fromEntries(formData), Object.fromEntries(formData.entries())
+      if (a.size() == 4 && Nodes.isIdent(a.get(0), "Object") && Nodes.isLeaf(a.get(1), ".") && Nodes.isIdent(a.get(2), "fromEntries")
+        && a.get(3) instanceof Node.Group g && g.items().size() == 1) {
+        a = g.items().get(0);
+        if (a.size() > 3 && Nodes.isIdent(a.get(a.size() - 2), "entries") && Nodes.isLeaf(a.get(a.size() - 3), ".")) {
+          a = a.subList(0, a.size() - 3);
+        }
+      }
+      if (path.size() != 1 || a.isEmpty()) {
+        return null;
+      }
+      // the field as read from the value: value.get('next'), a getter of form data, a field of a body or an action argument
+      Token at = a.get(a.size() - 1).last();
+      List<Node> read = new ArrayList<>(a);
+      read.add(new Node.Leaf(new Token(TokenKind.OP, ".", at.line(), at.column(), at.line(), at.column())));
+      read.add(new Node.Leaf(new Token(TokenKind.IDENT, "get", at.line(), at.column(), at.line(), at.column())));
+      Token key = new Token(TokenKind.STRING, "'" + path.get(0) + "'", at.line(), at.column(), at.line(), at.column());
+      read.add(new Node.Group(new Token(TokenKind.OP, "(", at.line(), at.column(), at.line(), at.column()),
+        new Token(TokenKind.OP, ")", at.line(), at.column(), at.line(), at.column()), List.of(new Node.Leaf(key))));
+      return keys(read, tainted, locals);
+    }
+
+    /**
+     * Names declared once in the scope with an object literal, what a schema parsed ({@code const p = S.safeParse(x)}),
+     * or a property of one ({@code const { data } = S.safeParse(x)}, {@code const data = p.data}).
+     */
+    static Map<String, Bound> bound(Node.Group scope) {
+      List<Decl> decls = declarations(scope);
+      Map<String, Integer> count = new HashMap<>();
+      decls.forEach(d -> d.names().forEach(t -> count.merge(t.text(), 1, Integer::sum)));
+      Map<String, Bound> out = new HashMap<>();
+      for (int pass = 0; pass < 2; pass++) {
+        for (Decl d : decls) {
+          List<Node> init = trim(d.init());
+          Token first = init.isEmpty() ? null : Nodes.leaf(init.get(0));
+          if (!(init.size() == 1 && init.get(0) instanceof Node.Group g && g.is("{") || parse(init) != null
+            || first != null && out.containsKey(first.text()) && members(init) != null)) {
+            continue;
+          }
+          if (d.plain()) {
+            String n = d.names().get(0).text();
+            if (count.get(n) == 1) {
+              out.putIfAbsent(n, new Bound(d.init(), List.of()));
+            }
+          } else {
+            d.properties().forEach((n, k) -> {
+              if (count.get(n) == 1) {
+                out.putIfAbsent(n, new Bound(d.init(), List.of(k)));
+              }
+            });
+          }
+        }
+      }
+      return out;
+    }
+
+    /** {@code S.parse(arg)}, {@code S.safeParse(arg).data}, {@code parseWithZod(arg, { schema: S })}, or null. */
+    private static Parse parse(List<Node> expr) {
+      List<Node> e = trim(expr);
+      List<String> tail = new ArrayList<>();
+      int end = e.size();
+      while (end > 2 && Nodes.leaf(e.get(end - 1)) != null && Nodes.leaf(e.get(end - 1)).kind() == TokenKind.IDENT
+        && (Nodes.isLeaf(e.get(end - 2), ".") || Nodes.isLeaf(e.get(end - 2), "?."))) {
+        tail.add(0, Nodes.leaf(e.get(end - 1)).text());
+        end -= 2;
+      }
+      if (end < 2 || !(e.get(end - 1) instanceof Node.Group call) || !call.is("(") || call.items().isEmpty()) {
+        return null;
+      }
+      Token m = Nodes.leaf(e.get(end - 2));
+      if (end == 2 && m != null && m.isIdent("parseWithZod") && call.items().size() == 2 && call.items().get(1).size() == 1
+        && call.items().get(1).get(0) instanceof Node.Group opts && opts.is("{")) {
+        List<Node> schema = Schemas.property(opts, "schema");
+        return schema == null ? null : new Parse(schema, call.items().get(0), "value", tail);
+      }
+      if (end < 4 || m == null || !PARSE.contains(m.text()) || !(Nodes.isLeaf(e.get(end - 3), ".") || Nodes.isLeaf(e.get(end - 3), "?."))
+        || call.items().size() != 1) {
+        return null;
+      }
+      return new Parse(e.subList(0, end - 3), call.items().get(0), m.text().startsWith("safe") || m.text().equals("spa") ? "data" : null,
+        tail);
+    }
+
+    /** The property names after the first name of a member chain ({@code p.data!.next} gives data, next), null if it is not one. */
+    static List<String> members(List<Node> e) {
+      Token t = e.isEmpty() ? null : Nodes.leaf(e.get(0));
+      if (t == null || t.kind() != TokenKind.IDENT) {
+        return null;
+      }
+      List<String> out = new ArrayList<>();
+      for (int i = 1; i < e.size(); i++) {
+        if (Nodes.isLeaf(e.get(i), "!")) {
+          continue;
+        }
+        Token name = i + 1 < e.size() ? Nodes.leaf(e.get(i + 1)) : null;
+        if (!(Nodes.isLeaf(e.get(i), ".") || Nodes.isLeaf(e.get(i), "?.")) || name == null || name.kind() != TokenKind.IDENT) {
+          return null;
+        }
+        out.add(name.text());
+        i++;
       }
       return out;
     }
@@ -682,8 +926,16 @@ final class ValueFlow {
       // the body of a request: await request.json(), req.body.next
       source |= body && root != null && REQUESTS.contains(root) && !locals.contains(root) && names.size() > 1
         && (names.get(1).equals("body") || names.get(1).equals("json"));
-      // a field of a Server Action's object parameter: data.callbackUrl, data.get('next')
-      source |= root != null && objects.contains(root) && !locals.contains(root) && names.size() > 1;
+      // a field of a Server Action's object parameter: data.callbackUrl, data.get('next'); one its schema leaves any string
+      source |= root != null && objects.contains(root) && !locals.contains(root) && names.size() > 1
+        && (!schemas.containsKey(root) || members(e.subList(0, keyEnd)) == null
+        || !Boolean.FALSE.equals(fields.free(schemas.get(root), members(e.subList(0, keyEnd)))));
+      // a field of an object literal or of what a schema parsed: data.next, parsed.data.next
+      List<List<String>> fieldKeys = null;
+      if (!source && root != null && !tainted.containsKey(root) && bound.containsKey(root)) {
+        fieldKeys = field(e.subList(0, keyEnd), List.of(), tainted, locals, 0);
+        source = fieldKeys != null;
+      }
       if (!source) {
         return null;
       }
@@ -700,6 +952,9 @@ final class ValueFlow {
           }
         }
         keys.add(key);
+      }
+      if (fieldKeys != null) {
+        keys.addAll(fieldKeys);
       }
       return keys;
     }

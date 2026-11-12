@@ -85,9 +85,12 @@ public final class JsTrees {
       }
       j++;
       // TypeScript return type, a function type too: (): (...args: A) => Promise<R> {
+      // and object types inside type arguments: Promise<{ error?: string } | void> {
       boolean typed = j < kids.size() && Nodes.isLeaf(kids.get(j), ":");
+      int angle = 0;
       while (j < kids.size() && (kids.get(j) instanceof Node.Leaf l && !l.token().is(",") && !l.token().is(";")
-        || typed && kids.get(j) instanceof Node.Group t && (t.is("(") || t.is("[")))) {
+        || typed && kids.get(j) instanceof Node.Group t && (t.is("(") || t.is("[") || angle > 0))) {
+        angle += angles(kids.get(j));
         j++;
       }
       if (j < kids.size() && kids.get(j) instanceof Node.Group body && body.is("{")) {
@@ -102,8 +105,10 @@ public final class JsTrees {
       arrow = i + 1;
       if (arrow < kids.size() && Nodes.isLeaf(kids.get(arrow), ":")) {
         // TypeScript return type: (x): Promise<void> => ..., (x): Promise<Item[]> => ...
+        int angle = 0;
         while (arrow < kids.size() && (kids.get(arrow) instanceof Node.Leaf l && !l.token().is("=>") && !l.token().is(",")
-          && !l.token().is(";") || kids.get(arrow) instanceof Node.Group a && a.is("["))) {
+          && !l.token().is(";") || kids.get(arrow) instanceof Node.Group a && (a.is("[") || angle > 0))) {
+          angle += angles(kids.get(arrow));
           arrow++;
         }
       }

@@ -7,8 +7,10 @@
 target is taken from <code>searchParams</code>, <code>params</code>, form data, the Pages Router <code>query</code>
 (<code>router.query</code>, <code>req.query</code>), the request body of a route handler or API route
 (<code>await request.json()</code>, <code>req.body</code>) or the arguments of a Server Action (a field of an object
-argument, <code>values.callbackUrl</code>, or of an action library's <code>parsedInput</code>), with no allow-list or
-same-origin check.</p>
+argument, <code>values.callbackUrl</code>, or of an action library's <code>parsedInput</code>), also through a field of
+an object literal (<code>const data = { next: formData.get('next') }</code>) or of what a zod schema parsed from them
+(<code>Schema.safeParse({ next: formData.get('next') }).data.next</code>) when the schema accepts any string for that
+field, with no allow-list or same-origin check.</p>
 <h2>Why is this an issue?</h2>
 <p>An open redirect lets an attacker build a link on your trusted domain that sends the visitor to a site of their
 choice: <code>https://your.app/login?next=https://evil.example</code>. It is used for phishing, and to steal tokens
@@ -20,7 +22,11 @@ fallback such as <code>?? '/'</code>, a cast, <code>String()</code>, <code>new U
 It stays silent when the value is compared, tested (<code>startsWith</code>, <code>match</code>), passed to a check
 (<code>isSafeUrl</code>, <code>allowed.includes</code>) before the redirect in the function, or transformed by a
 helper, when a fixed path or origin comes first, and when a request value is compared with a server secret before
-(<code>req.query.secret !== process.env.PREVIEW_SECRET</code>): only who knows the secret gets to the redirect.</p>
+(<code>req.query.secret !== process.env.PREVIEW_SECRET</code>): only who knows the secret gets to the redirect. A
+schema field restricted with <code>.startsWith()</code>, <code>.regex()</code>, <code>z.enum()</code>,
+<code>z.literal()</code>, or a <code>refine</code> / <code>transform</code> that checks the path or the host, is not
+reported; <code>z.string()</code> with <code>.optional()</code>, <code>.min()</code>, <code>.default()</code>,
+<code>.trim()</code> or <code>.url()</code> accepts <code>https://evil.example</code> and is.</p>
 <h2>How to fix it</h2>
 <p>Accept only local paths (starting with one <code>/</code>, not <code>//</code> or <code>/\</code>), or compare the
 origin of the parsed URL with your own, or map the value to an allow-list.</p>
@@ -50,6 +56,13 @@ export async function signIn(values: { email: string; password: string; callback
   redirect(values.callbackUrl ?? '/'); // Noncompliant
 }
 
+const LoginSchema = z.object({ email: z.string().email(), next: z.string().optional() });
+export async function logIn(formData: FormData) {
+  const parsed = LoginSchema.safeParse({ email: formData.get('email'), next: formData.get('next') });
+  if (!parsed.success) return;
+  redirect(parsed.data.next ?? '/'); // Noncompliant
+}
+
 'use client';
 export function LoginForm() {
   const router = useRouter();
@@ -62,6 +75,11 @@ export function LoginForm() {
 </pre>
 <h3>Compliant solution</h3>
 <pre>
+const LoginSchema = z.object({
+  email: z.string().email(),
+  next: z.string().refine((v) =&gt; v.startsWith('/') &amp;&amp; !v.startsWith('//')).optional(),
+});
+
 export default async function Login({ searchParams }) {
   const { next } = await searchParams;
   if (await auth()) {

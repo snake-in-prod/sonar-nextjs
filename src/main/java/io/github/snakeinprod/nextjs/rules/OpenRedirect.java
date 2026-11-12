@@ -1,6 +1,7 @@
 package io.github.snakeinprod.nextjs.rules;
 
 import io.github.snakeinprod.nextjs.js.JsTrees;
+import io.github.snakeinprod.nextjs.model.ActionBuilder;
 import io.github.snakeinprod.nextjs.model.Module;
 import io.github.snakeinprod.nextjs.model.ServerAction;
 import io.github.snakeinprod.nextjs.parse.Chain;
@@ -24,7 +25,10 @@ import java.util.regex.Pattern;
  * {@code window.location.href = ...} and {@code window.location.assign()} / {@code replace()} whose target is a value
  * from searchParams, params, form data, the request body of an endpoint ({@code await request.json()}, {@code req.body})
  * or a Server Action argument ({@code values.callbackUrl}) as it is (see {@link ValueFlow.Direct}), also held in React state
- * ({@code setNext(searchParams.get('next'))}), with no check of that value before the redirect in the function:
+ * ({@code setNext(searchParams.get('next'))}) or in a field of an object literal or of what a zod schema parsed from the
+ * request, when the schema leaves that field any string ({@code S.safeParse({ next: formData.get('next') }).data.next},
+ * see {@link Schemas}; an action library's {@code parsedInput} and a wrapped action given a schema are read through
+ * it too), with no check of that value before the redirect in the function:
  * compared, tested with a method ({@code startsWith}, {@code match}), or passed to a function whose name says it checks
  * ({@code isSafeUrl}, {@code allowed.includes}), or a comparison with a server secret before it. A value built by an
  * unknown helper is not followed.
@@ -39,6 +43,7 @@ public class OpenRedirect implements NextRule {
   private static final Set<String> LOCATION_CALLS = Set.of("assign", "replace");
   /** What an action library handler gets from the client: next-safe-action, zsa. */
   private static final Set<String> BUILDER_INPUTS = Set.of("parsedInput", "clientInput", "input");
+  private static final Set<String> SCHEMA_STEPS = Set.of("schema", "inputSchema", "input");
 
   @Override
   public void check(RuleContext ctx) {
@@ -98,11 +103,15 @@ public class OpenRedirect implements NextRule {
       return;
     }
     boolean body = apiResponse || m.route() != null && m.route().isEndpoint();
+    Schemas schemas = new Schemas(ctx.model());
+    ValueFlow.Direct.Fields fields = (schema, path) -> schemas.free(m, schema, path);
     List<ValueFlow> flows = ValueFlow.flows(ctx.file().root(), f -> {
       Map<String, List<List<String>>> seeds = new HashMap<>(ValueFlow.Direct.formDataParams(f));
       Set<String> objects = new HashSet<>();
-      actionInputs(m, f, seeds, objects);
-      return new ValueFlow(f, new ValueFlow.Direct(false, m.route() != null, body, objects), seeds, true);
+      Map<String, List<Node>> objectSchemas = new HashMap<>();
+      actionInputs(m, f, seeds, objects, objectSchemas, fields, schemas);
+      return new ValueFlow(f, new ValueFlow.Direct(false, m.route() != null, body, objects, objectSchemas,
+        ValueFlow.Direct.bound(ValueFlow.scopeOf(f)), fields), seeds, true);
     });
     for (List<Node> target : targets) {
       ValueFlow flow = ValueFlow.at(flows, target.get(0).first());
@@ -121,7 +130,8 @@ public class OpenRedirect implements NextRule {
    * itself is not ({@code redirect(path)} of an action called with fixed paths). An action library handler's
    * {@code parsedInput}, {@code clientInput} or {@code input} is such a parameter.
    */
-  private static void actionInputs(Module m, JsTrees.Fn scope, Map<String, List<List<String>>> seeds, Set<String> objects) {
+  private static void actionInputs(Module m, JsTrees.Fn scope, Map<String, List<List<String>>> seeds, Set<String> objects,
+    Map<String, List<Node>> schemas, ValueFlow.Direct.Fields fields, Schemas checker) {
     Token from = ValueFlow.first(scope);
     Token to = scope.body().last();
     for (ServerAction a : m.serverActions()) {
@@ -131,21 +141,29 @@ public class OpenRedirect implements NextRule {
       }
       List<List<Node>> params = fn.param() != null ? List.of(List.of(new Node.Leaf(fn.param()))) : fn.params().items();
       if (a.builder() != null) {
-        // ({ parsedInput }), ({ parsedInput: data }), ({ parsedInput: { next } }): the client's input, a schema keeps any string
+        // ({ parsedInput }), ({ parsedInput: data }), ({ parsedInput: { next } }): the client's input, but for the fields
+        // its schema restricts (one that cannot be read keeps every field)
         if (!params.isEmpty() && !params.get(0).isEmpty() && params.get(0).get(0) instanceof Node.Group g && g.is("{")) {
-          for (List<Node> item : g.items()) {
-            Token key = item.isEmpty() ? null : Nodes.leaf(item.get(0));
-            if (key != null && BUILDER_INPUTS.contains(key.text())) {
-              input(item.size() > 2 && Nodes.isLeaf(item.get(1), ":") ? item.get(2) : item.get(0), seeds, objects);
-            }
-          }
+          contextInputs(g, seeds, objects, schemaOf(a.builder()), schemas, fields);
         }
         continue;
       }
+      // a wrapper given a schema beside the function: withSchema(schema, async (data) => ...),
+      // service({ schema }, async ({ input }) => ...)
+      List<Node> schema = a.wrapper() == null ? null : wrapperSchema(m, fn, checker);
       for (int i = 0; i < params.size(); i++) {
         List<Node> item = params.get(i);
-        if (!item.isEmpty() && (a.wrapper() == null || a.wrapper().clientArg(i))) {
-          input(Nodes.isLeaf(item.get(0), "...") && item.size() > 1 ? item.get(1) : item.get(0), seeds, objects);
+        if (item.isEmpty() || a.wrapper() != null && !a.wrapper().clientArg(i)) {
+          continue;
+        }
+        Node p = Nodes.isLeaf(item.get(0), "...") && item.size() > 1 ? item.get(1) : item.get(0);
+        if (schema != null && p instanceof Node.Group g && g.is("{")
+          && g.items().stream().anyMatch(f -> !f.isEmpty() && Nodes.leaf(f.get(0)) != null
+          && BUILDER_INPUTS.contains(Nodes.leaf(f.get(0)).text()))) {
+          // ({ input }): the wrapper hands the parsed value in a context object
+          contextInputs(g, seeds, objects, schema, schemas, fields);
+        } else {
+          input(p, seeds, objects, schema, schemas, fields);
         }
       }
     }
@@ -154,18 +172,78 @@ public class OpenRedirect implements NextRule {
     }
     for (ValueFlow.Decl d : ValueFlow.declarations(ValueFlow.scopeOf(scope))) {
       List<Node> init = ValueFlow.Direct.trim(d.init());
-      if (!d.plain() && init.size() == 1 && Nodes.leaf(init.get(0)) != null && objects.contains(Nodes.leaf(init.get(0)).text())) {
-        d.names().forEach(t -> seeds.putIfAbsent(t.text(), List.of(List.of(t.text()))));
+      Token object = init.size() == 1 ? Nodes.leaf(init.get(0)) : null;
+      if (!d.plain() && object != null && objects.contains(object.text())) {
+        Map<String, String> properties = d.properties();
+        d.names().stream()
+          .filter(t -> !schemas.containsKey(object.text()) || !properties.containsKey(t.text())
+            || !Boolean.FALSE.equals(fields.free(schemas.get(object.text()), List.of(properties.get(t.text())))))
+          .forEach(t -> seeds.putIfAbsent(t.text(), List.of(List.of(t.text()))));
       }
     }
   }
 
-  /** A parameter: its destructured names are inputs, a plain name is an object whose fields are. */
-  private static void input(Node p, Map<String, List<List<String>>> seeds, Set<String> objects) {
+  /**
+   * ({ parsedInput }), ({ parsedInput: data }), ({ parsedInput: { next } }), ({ input }), ({ clientInput }): the
+   * client's input, read through the schema but for clientInput, which comes before it.
+   */
+  private static void contextInputs(Node.Group g, Map<String, List<List<String>>> seeds, Set<String> objects, List<Node> schema,
+    Map<String, List<Node>> schemas, ValueFlow.Direct.Fields fields) {
+    for (List<Node> item : g.items()) {
+      Token key = item.isEmpty() ? null : Nodes.leaf(item.get(0));
+      if (key != null && BUILDER_INPUTS.contains(key.text())) {
+        input(item.size() > 2 && Nodes.isLeaf(item.get(1), ":") ? item.get(2) : item.get(0), seeds, objects,
+          key.text().equals("clientInput") ? null : schema, schemas, fields);
+      }
+    }
+  }
+
+  /** A zod schema given to the wrapper call beside the wrapped function, as an argument or as its options' {@code schema}. */
+  private static List<Node> wrapperSchema(Module m, JsTrees.Fn fn, Schemas checker) {
+    if (!fn.container().is("(")) {
+      return null;
+    }
+    Token start = ValueFlow.first(fn);
+    for (List<Node> item : fn.container().items()) {
+      if (item.isEmpty() || ValueFlow.within(start, item.get(0).first(), item.get(item.size() - 1).last())) {
+        continue;
+      }
+      List<Node> candidate = item.size() == 1 && item.get(0) instanceof Node.Group g && g.is("{") ? Schemas.property(g, "schema") : item;
+      if (candidate != null && checker.isSchema(m, candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /** The schema an action library chain validates its input with: the argument of its last schema, inputSchema or input step. */
+  private static List<Node> schemaOf(ActionBuilder b) {
+    List<Node> out = null;
+    for (ActionBuilder.Step s : b.steps()) {
+      if (SCHEMA_STEPS.contains(s.name().text()) && !s.args().items().isEmpty()) {
+        out = s.args().items().get(0);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A parameter: its destructured names are inputs, a plain name is an object whose fields are. With a schema, a
+   * destructured name it restricts is not, and the object's fields are read through it.
+   */
+  private static void input(Node p, Map<String, List<List<String>>> seeds, Set<String> objects, List<Node> schema,
+    Map<String, List<Node>> schemas, ValueFlow.Direct.Fields fields) {
     if (p instanceof Node.Group g && g.is("{")) {
-      ValueFlow.names(g).forEach(t -> seeds.putIfAbsent(t.text(), List.of(List.of(t.text()))));
+      Map<String, String> properties = ValueFlow.properties(g);
+      ValueFlow.names(g).stream()
+        .filter(t -> schema == null || !properties.containsKey(t.text())
+          || !Boolean.FALSE.equals(fields.free(schema, List.of(properties.get(t.text())))))
+        .forEach(t -> seeds.putIfAbsent(t.text(), List.of(List.of(t.text()))));
     } else if (Nodes.leaf(p) != null && Nodes.leaf(p).kind() == TokenKind.IDENT) {
       objects.add(Nodes.leaf(p).text());
+      if (schema != null) {
+        schemas.put(Nodes.leaf(p).text(), schema);
+      }
     }
   }
 
@@ -175,7 +253,10 @@ public class OpenRedirect implements NextRule {
    */
   private static boolean secretGate(List<Token> toks, Token until) {
     for (int i = 0; i + 4 < toks.size() && ValueFlow.pos(toks.get(i)) < ValueFlow.pos(until); i++) {
+      // NODE_ENV, VERCEL_ENV and NEXT_PUBLIC_ values are no secrets: process.env.NODE_ENV === 'production'
+      String name = toks.get(i + 4).text();
       if (toks.get(i).isIdent("process") && toks.get(i + 1).is(".") && toks.get(i + 2).isIdent("env") && toks.get(i + 3).is(".")
+        && !name.equals("NODE_ENV") && !name.equals("VERCEL_ENV") && !name.startsWith("NEXT_PUBLIC_")
         && (i > 0 && EQUALITY.contains(toks.get(i - 1).text()) || i + 5 < toks.size() && EQUALITY.contains(toks.get(i + 5).text()))) {
         return true;
       }

@@ -31,7 +31,8 @@ No grammar and no external parser, as in the sibling plugins. `js.JsLexer` turns
 (IDENT, NUMBER, STRING, OP, OTHER for JSX text); comments come separately. `parse.TreeBuilder` groups tokens by
 brackets into a `Node` tree; `parse.Chains` finds member and call chains (`cookies().get("id")`,
 `process.env.API_URL`, `NextResponse.redirect(url)`). `js.JsTrees` finds function literals (`Fn`: function
-declarations and expressions, arrow functions), their names (`nameOf`) and whether a chain is awaited or returned.
+declarations and expressions, arrow functions, a return type with object types in its type arguments,
+`Promise<{ error?: string } | void>`, skipped), their names (`nameOf`) and whether a chain is awaited or returned.
 The lexer never throws; a broken file still gives a tree.
 
 ## The model (package `model`)
@@ -161,13 +162,30 @@ name no parameter of the action nor a local built from one without an await; del
 OpenRedirect: in a Pages Router API route, or a module importing `NextApiResponse` from next, `res.redirect(url)`,
 `res.redirect(status, url)` and the Location of `res.writeHead(status, { Location: url })` are sinks too. A
 comparison with `process.env.X` before the sink (`req.query.secret !== process.env.PREVIEW_SECRET`) is a secret gate:
-silent. The request body is a source in route handlers, API routes and modules importing `NextApiResponse`:
+silent; `NODE_ENV`, `VERCEL_ENV` and `NEXT_PUBLIC_*` are no secrets (`secure: process.env.NODE_ENV === 'production'`).
+The request body is a source in route handlers, API routes and modules importing `NextApiResponse`:
 `await request.json()` and `req.body` of a parameter named `req` or `request` (fields and destructured names too). In a
 Server Action every parameter the client fills (for a wrapped action its `clientArg` ones; for an action library
 handler `parsedInput`, `clientInput`, `input`) is an input: a destructured field (`{ callbackUrl }`), a field or
 `.get()` of a plain parameter (`values.callbackUrl`, `data.get('next')`) and names destructured from it in the body,
-but not the plain parameter itself (`go(path: string)` is called with fixed paths). A value parsed by a schema
-(`schema.safeParse(values).data.next`) is not followed.
+but not the plain parameter itself (`go(path: string)` is called with fixed paths).
+
+Fields are followed (`ValueFlow.Direct`, names declared once in the scope): an object literal's
+(`const data = { next: formData.get('next') }; redirect(data.next)`, nested, spread, destructured), and what a zod
+schema parsed from a request value (`const p = S.safeParse({ next: formData.get('next') })` then `p.data.next`,
+`S.parse(values).next`, `const { data } = S.safeParse(...)`, `S.parse(Object.fromEntries(formData))`,
+`parseWithZod(formData, { schema: S }).value.next`) when the schema leaves the field any string. `Schemas` reads the
+schema in the module or one import away (re-exports followed): `z.object`, `z.strictObject`, `zfd.formData`,
+`Base.extend({...})`, `.merge()`, `z.union` / `z.discriminatedUnion` of objects (any member); the field is any string
+when it is `z.string()`, `z.coerce.string()`, `z.url()` or `zfd.text()` with only `.optional()`, `.nullable()`,
+`.default()`, `.min()`, `.max()`, `.trim()`, `.url()`, `.or()` and the like, and `refine` / `superRefine` /
+`transform` / `pipe` calling no check (a name the check pattern matches, or `host`). `.startsWith()`, `.regex()`,
+enums, literals, unions of them, other types, helpers, a field the schema does not declare (zod strips it), an
+object-level refine naming the field, and a schema that cannot be read (from a package, `JSON.parse`) are silent.
+An action library's `parsedInput` (next-safe-action `.schema()` / `.inputSchema()`, zsa `.input()`) and a wrapped
+action given a schema beside the function (`withSchema(S, async (data) => ...)`,
+`service({ schema: S }, async ({ input }) => ...)`) are read through that schema the same way; there a schema that
+cannot be read keeps every field, as before. `clientInput` is what the client sent, before any schema.
 
 ### Test files
 

@@ -1,5 +1,7 @@
 <p>A <code>redirect()</code>, <code>permanentRedirect()</code> (next/navigation), <code>NextResponse.redirect()</code>
-(next/server) or <code>Response.redirect()</code>, a <code>router.push()</code> or <code>router.replace()</code> of
+(next/server) or <code>Response.redirect()</code>, a <code>res.redirect(url)</code>, <code>res.redirect(status, url)</code> or
+<code>res.writeHead(status, { Location: url })</code> of a Pages Router API route (or of a module typed with
+<code>NextApiResponse</code>), a <code>router.push()</code> or <code>router.replace()</code> of
 <code>useRouter()</code> (next/navigation, next/router) or of the next/router <code>Router</code>, or a
 <code>window.location.href</code> assignment or <code>window.location.assign()</code> / <code>replace()</code> whose
 target is taken from <code>searchParams</code>, <code>params</code>, form data or the Pages Router <code>query</code>
@@ -14,7 +16,8 @@ URLs, <code>router.push()</code> navigates to an absolute URL with a full page l
 fallback such as <code>?? '/'</code>, a cast, <code>String()</code>, <code>new URL()</code>, or a template literal starting with it).
 It stays silent when the value is compared, tested (<code>startsWith</code>, <code>match</code>), passed to a check
 (<code>isSafeUrl</code>, <code>allowed.includes</code>) before the redirect in the function, or transformed by a
-helper, and when a fixed path or origin comes first.</p>
+helper, when a fixed path or origin comes first, and when a request value is compared with a server secret before
+(<code>req.query.secret !== process.env.PREVIEW_SECRET</code>): only who knows the secret gets to the redirect.</p>
 <h2>How to fix it</h2>
 <p>Accept only local paths (starting with one <code>/</code>, not <code>//</code> or <code>/\</code>), or compare the
 origin of the parsed URL with your own, or map the value to an allow-list.</p>
@@ -30,6 +33,12 @@ export default async function Login({ searchParams }) {
 export async function GET(request) {
   const to = request.nextUrl.searchParams.get('to') ?? '/';
   return NextResponse.redirect(new URL(to, request.url)); // Noncompliant
+}
+
+// pages/api/preview.ts
+export default function handler(req, res) {
+  res.setDraftMode({ enable: true });
+  res.redirect(req.query.slug); // Noncompliant
 }
 
 'use client';

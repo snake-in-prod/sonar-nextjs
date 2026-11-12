@@ -124,6 +124,21 @@ helpers it calls); ServerActionWithoutValidation skips it when the wrapper parse
 `clientArg` parameters as input. A wrapper given a member (`wrap(service.save)`), or one from a package, is no
 action the model sees.
 
+### Rule notes
+
+ServerActionWithoutAuth: an app (the nearest package.json declaring next) with no session call anywhere has no
+sign-in and its actions are public by design; a session helper given an id (`getUser(userId)`, `getUser(params.id)`)
+looks a record up and counts neither there nor as an action's session check. Such an app with a page under `/admin`
+guards it in the browser at most: actions calling an update, delete, remove, destroy or upsert are reported, creating
+ones are not. In a getter (`get|fetch|list|find|load|read|search` + capital), database writes that store no value of
+the caller are syncs and do not count: the write's arguments (where clauses left out, every write of a transaction)
+name no parameter of the action nor a local built from one without an await; deletes and raw SQL never are syncs.
+
+OpenRedirect: in a Pages Router API route, or a module importing `NextApiResponse` from next, `res.redirect(url)`,
+`res.redirect(status, url)` and the Location of `res.writeHead(status, { Location: url })` are sinks too. A
+comparison with `process.env.X` before the sink (`req.query.secret !== process.env.PREVIEW_SECRET`) is a secret gate:
+silent.
+
 ### Test files
 
 `*.test.*`, `*.spec.*`, `*.stories.*` and files under `__tests__/`, `__mocks__/`, `__fixtures__/`, `e2e/`,
